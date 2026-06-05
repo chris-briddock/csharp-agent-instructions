@@ -8,12 +8,12 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 
 ---
 
-# Table of Contents
+## Table of Contents
 
-## Part I: C# Language & Coding Standards
+### Part I: C# Language & Coding Guidelines
 
 - [Core Principles](#core-principles)
-- [C# Standards](#c-standards)
+- [C# Coding Guidelines](#c-coding-guidelines)
   - [Naming](#naming)
   - [Language Features](#language-features)
   - [Async](#async)
@@ -21,58 +21,65 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [Multi-Threading](#multi-threading)
   - [Exceptions](#exceptions)
   - [LINQ](#linq)
-- [Documentation Standards](#documentation-standards)
-- [Constants](#constants)
-- [Options Pattern](#options-pattern)
-- [Preferred Framework Patterns](#preferred-framework-patterns)
-- [Domain Behaviour Pattern](#domain-behaviour-pattern)
+  - [PLINQ](#plinq)
 - [Value Objects](#value-objects)
-- [Service Lifetimes](#service-lifetimes)
 - [Nullable Reference Types](#nullable-reference-types)
 - [Generic Variance](#generic-variance)
 - [High-Performance Memory Patterns](#high-performance-memory-patterns)
+  - [Object Pooling](#object-pooling)
 - [Modern C# Disposal Patterns](#modern-c-disposal-patterns)
+- [TimeProvider Abstraction](#timeprovider-abstraction)
+- [Documentation Standards](#documentation-standards)
+- [Constants](#constants)
 
-## Part II: ASP.NET Core & System Architecture
+## Part II: Architecture & ASP.NET Core
 
 - [Architecture](#architecture)
   - [General](#general)
   - [Messaging Infrastructure](#messaging-infrastructure)
+- [Central Package Management](#central-package-management)
 - [Service Naming Conventions](#service-naming-conventions)
 - [Event-Driven Architecture](#event-driven-architecture)
 - [Service-Oriented Architecture](#service-oriented-architecture)
 - [Domain-Driven Design](#domain-driven-design)
 - [Resilience and Reliability](#resilience-and-reliability)
-- [ASP.NET Core Standards](#aspnet-core-standards)
+- [ASP.NET Core](#aspnet-core)
   - [API Style](#api-style)
   - [Endpoint Design](#endpoint-design)
   - [API Versioning](#api-versioning)
   - [Dependency Injection](#dependency-injection)
+    - [Service Lifetimes](#service-lifetimes)
   - [Configuration](#configuration)
+    - [Options Pattern](#options-pattern)
   - [Logging](#logging)
   - [Health Checks](#health-checks)
   - [Background Jobs](#background-jobs)
   - [Middleware & Filters](#middleware--filters)
-- [Worker Services](#worker-services)
-- [System.Threading.Channels](#systemthreadingchannels)
-- [Caching](#caching)
-  - [Output Caching & Response Caching](#output-caching--response-caching)
-- [Rate Limiting](#rate-limiting)
-- [OpenAPI](#openapi)
-- [Feature Flags](#feature-flags)
-- [CQRS](#cqrs)
+  - [Problem Details](#problem-details)
+  - [Worker Services](#worker-services)
+  - [System.Threading.Channels](#systemthreadingchannels)
+  - [Caching](#caching)
+    - [Output Caching & Response Caching](#output-caching--response-caching)
+  - [Rate Limiting](#rate-limiting)
+  - [OpenAPI](#openapi)
+  - [Feature Flags](#feature-flags)
+  - [CQRS](#cqrs)
+  - [Authentication & Authorization](#authentication--authorization)
+  - [HttpClient & IHttpClientFactory](#httpclient--ihttpclientfactory)
+  - [Distributed Tracing](#distributed-tracing)
+  - [Metrics & OpenTelemetry](#metrics--opentelemetry)
+  - [Persistence Guidlines](#persistence-guidlines)
+  - [Testing Standards](#testing-standards)
+    - [Unit Testing](#unit-testing)
+    - [Integration Testing](#integration-testing)
+    - [Architecture Testing](#architecture-testing)
+  - [Security Standards](#security-standards)
+  - [Preferred Framework Patterns](#preferred-framework-patterns)
+  - [Domain Behaviour Pattern](#domain-behaviour-pattern)
 - [System.Text.Json](#systemtextjson)
 - [gRPC](#grpc)
+- [SignalR](#signalr)
 - [Server-Sent Events](#server-sent-events)
-- [Authentication & Authorization](#authentication--authorization)
-- [HttpClient & IHttpClientFactory](#httpclient--ihttpclientfactory)
-- [Distributed Tracing](#distributed-tracing)
-- [Metrics & OpenTelemetry](#metrics--opentelemetry)
-- [Persistence Standards](#persistence-standards)
-- [Testing Standards](#testing-standards)
-  - [Integration Testing](#integration-testing)
-- [Security Standards](#security-standards)
-- [Problem Details](#problem-details)
 
 ## Part III: SonarQube C# Rules
 
@@ -88,9 +95,9 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 
 ---
 
-# Core Principles
+## Core Principles
 
-1. Prefer simplicity over cleverness.
+1. Prefer simplicity over cleverness (KISS)
 2. Follow SOLID principles.
 3. Avoid duplication (DRY).
 4. Avoid unnecessary abstractions (YAGNI).
@@ -101,7 +108,7 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 
 ---
 
-# C# Standards
+## C# Coding Guidelines
 
 ## Naming
 
@@ -160,7 +167,7 @@ IUserRepository
 IEmailSender
 ```
 
-#### When to Add an Interface
+### When to Add an Interface
 
 Introduce an interface when there is a demonstrated need for abstraction — not by default for every class.
 
@@ -479,7 +486,7 @@ public Task<string> ReadFileAsync(string path)
 }
 ```
 
-### Summary of anti-patterns to avoid
+#### Summary of anti-patterns to avoid
 
 - `.Result` — blocks thread, deadlock risk
 - `.Wait()` — blocks thread, deadlock risk
@@ -853,7 +860,6 @@ public async Task ProcessAsync()
 }
 ```
 
-
 ---
 
 ## LINQ
@@ -904,11 +910,47 @@ var topCategories = categorySummaries
     .ToList();
 ```
 
+## PLINQ
+
+Use PLINQ when processing large, CPU-bound datasets in-memory. Parallel LINQ splits work across multiple cores, but it introduces overhead from partitioning and thread coordination. Use it only when the operation is compute-intensive and the source collection is large enough to offset that overhead.
+
+**Compliant:**
+
+```csharp
+var highValueOrders = orders
+    .AsParallel()
+    .WithCancellation(ct)
+    .Where(o => o.CalculateComplexMetrics() > Threshold)
+    .Select(o => new OrderSummary(o.Id, o.Total))
+    .ToList();
+```
+
+Guidelines:
+
+- Do not use PLINQ for I/O-bound or short collections; the overhead exceeds the benefit.
+- Always use `.AsOrdered()` when the consumer requires order preservation.
+- Prefer `.WithDegreeOfParallelism(Environment.ProcessorCount)` when you need explicit control.
+- Do not mutate shared state inside PLINQ lambdas; use thread-safe accumulators or return projections.
+- Use `.WithCancellation()` to allow cooperative cancellation.
+
+**Noncompliant:**
+
+```csharp
+var total = 0;
+orders.AsParallel().ForEach(o => total += o.Total); // Race condition
+```
+
+**Compliant:**
+
+```csharp
+var total = orders.AsParallel().Sum(o => o.Total);
+```
+
 ---
 
-# Documentation Standards
+## Documentation Standards
 
-## XML Documentation
+### XML Documentation
 
 Use XML documentation comments exclusively for public APIs and important domain behaviour.
 
@@ -939,7 +981,7 @@ Avoid non-XML comments unless absolutely necessary.
 
 ---
 
-# Constants
+## Constants
 
 Avoid magic strings and magic numbers.
 
@@ -972,80 +1014,7 @@ Guidelines:
 
 ---
 
-# Options Pattern
-
-Prefer strongly typed options classes.
-
-Avoid reading configuration values directly throughout the application.
-
-Prefer dedicated ConfigureOptions classes using IConfigureOptions<T>.
-
-Example:
-
-```csharp
-public sealed class JwtOptions
-{
-    public required string Issuer { get; init; }
-    public required string Audience { get; init; }
-}
-```
-
-```csharp
-public sealed class ConfigureJwtOptions
-    : IConfigureOptions<JwtOptions>
-{
-    private readonly IConfiguration _configuration;
-
-    /// <summary>
-    /// Initializes a new instance of the ConfigureJwtOptions class.
-    /// </summary>
-    /// <param name="configuration">Application configuration.</param>
-    public ConfigureJwtOptions(
-        IConfiguration configuration)
-    {
-        _configuration = configuration;
-    }
-
-    /// <summary>
-    /// Configures JWT options.
-    /// </summary>
-    /// <param name="options">The options instance.</param>
-    public void Configure(JwtOptions options)
-    {
-        _configuration
-            .GetSection("Jwt")
-            .Bind(options);
-    }
-}
-```
-
-Registration:
-
-```csharp
-services.AddSingleton<
-    IConfigureOptions<JwtOptions>,
-    ConfigureJwtOptions>();
-```
-
-Avoid:
-
-```csharp
-services.Configure<JwtOptions>(
-    configuration.GetSection("Jwt"));
-```
-
-Guidelines:
-
-- Prefer IConfigureOptions<T> implementations.
-- Keep configuration binding in a single location.
-- Prefer strongly typed options.
-- Avoid magic configuration keys throughout the application.
-- Inject IOptions<T>, IOptionsSnapshot<T>, or IOptionsMonitor<T>.
-- Keep Program.cs focused on composition rather than implementation details.
-
----
-
-# Problem Details
+## Problem Details
 
 Prefer extending problem details as per below:
 
@@ -1126,7 +1095,7 @@ public sealed class ConfigureProblemDetailsOptions : IConfigureOptions<ProblemDe
 
 ---
 
-# Preferred Framework Patterns
+## Preferred Framework Patterns
 
 Prefer:
 
@@ -1140,9 +1109,9 @@ Prefer:
 
 ---
 
-# Domain Behaviour Pattern
+## Domain Behaviour Pattern
 
-## Entity Behaviour
+### Entity Behaviour
 
 Prefer adding behaviour through extension methods rather than methods on entity classes.
 
@@ -1182,7 +1151,7 @@ Guidelines:
 
 ---
 
-# Value Objects
+## Value Objects
 
 Value objects are immutable objects defined by their attributes rather than identity. Two value objects with the same data are equal. Use them for concepts like money, addresses, and email values.
 
@@ -1216,11 +1185,11 @@ Guidelines:
 
 ---
 
-# Service Lifetimes
+### Service Lifetimes
 
 Prefer constructor injection and understand the implications of each lifetime.
 
-## Transient
+### Transient
 
 A new instance is created every time the service is requested.
 
@@ -1229,11 +1198,12 @@ services.AddTransient<IEmailSender, SmtpEmailSender>();
 ```
 
 Use for:
+
 - Stateless services
 - Lightweight services with no shared state
 - Services that are not thread-safe
 
-## Scoped
+### Scoped
 
 One instance per request (or per scope).
 
@@ -1242,11 +1212,12 @@ services.AddScoped<IOrderRepository, OrderRepository>();
 ```
 
 Use for:
+
 - Entity Framework `DbContext`
 - Request-specific state
 - Services that should share state within a single request
 
-## Singleton
+### Singleton
 
 One instance for the lifetime of the application.
 
@@ -1255,6 +1226,7 @@ services.AddSingleton<ICacheService, MemoryCacheService>();
 ```
 
 Use for:
+
 - Shared caches
 - Configuration readers
 - Thread-safe state that must persist across requests
@@ -1308,11 +1280,11 @@ Guidelines:
 
 ---
 
-# Generic Variance
+## Generic Variance
 
 C# supports generic variance through the `in` and `out` keywords on interface type parameters. Variance controls whether a generic interface can be implicitly converted when its type arguments have an inheritance relationship.
 
-## Covariance (`out`)
+### Covariance (`out`)
 
 A type parameter marked with `out` is covariant. It allows a more derived type to be used where a less derived type is expected. Covariance only applies to return types (output positions).
 
@@ -1337,11 +1309,12 @@ IEventReader<object> reader = new OrderEventReader(); // Valid because OrderCrea
 ```
 
 Guidelines:
+
 - Use `out` for interfaces that only produce values (readers, factories, sequences).
 - `IEnumerable<T>` is covariant because it only outputs values.
 - Do not declare `out` parameters if the interface has any method that accepts `T` as input.
 
-## Contravariance (`in`)
+### Contravariance (`in`)
 
 A type parameter marked with `in` is contravariant. It allows a less derived type to be used where a more derived type is expected. Contravariance only applies to input positions (parameters).
 
@@ -1366,6 +1339,7 @@ IEventHandler<OrderCreatedEvent> handler = new DomainEventHandler(); // Valid be
 ```
 
 Guidelines:
+
 - Use `in` for interfaces that only consume values (handlers, comparers, writers).
 - `IComparer<T>` is contravariant because it only accepts values for comparison.
 - Do not declare `in` parameters if the interface has any method that returns `T`.
@@ -1388,17 +1362,18 @@ public interface IRepository<T> // Invariant
 ```
 
 Guidelines:
+
 - Keep interfaces invariant unless there is a clear, safe use case for variance.
 - Do not add `in` or `out` to type parameters that appear in both input and output positions.
 - Prefer explicit variance declarations to communicate intent to consumers.
 
 ---
 
-# High-Performance Memory Patterns
+## High-Performance Memory Patterns
 
 Prefer modern memory-efficient patterns for hot paths and high-throughput code. Use `Span<T>`, `Memory<T>`, `stackalloc`, and `IAsyncEnumerable<T>` to reduce allocations and improve cache locality.
 
-## Span<T> and ReadOnlySpan<T>
+### Span<T> and ReadOnlySpan<T>
 
 `Span<T>` provides a type-safe, memory-safe view into contiguous memory without allocation.
 
@@ -1420,6 +1395,7 @@ public int ParseIds(ReadOnlySpan<char> input, Span<int> output)
 ```
 
 Guidelines:
+
 - Use `Span<T>` for synchronous APIs operating on contiguous memory.
 - Use `ReadOnlySpan<T>` for read-only views.
 - Prefer `Span<T>` over `byte[]` or `char[]` for parsing and transformation.
@@ -1443,11 +1419,12 @@ public async Task ProcessStreamAsync(Stream stream, Memory<byte> buffer)
 ```
 
 Guidelines:
+
 - Use `Memory<T>` when data must outlive the current stack frame (e.g., async methods).
 - Use `ReadOnlyMemory<T>` for read-only data shared across threads.
 - Convert `Memory<T>` to `Span<T>` via `.Span` for synchronous processing.
 
-## stackalloc
+### Stackalloc
 
 Use `stackalloc` for small, fixed-size buffers to avoid heap allocations in hot paths.
 
@@ -1468,6 +1445,7 @@ public int SumSmallArray(ReadOnlySpan<int> values)
 ```
 
 Guidelines:
+
 - Limit `stackalloc` to small buffers (typically < 1 KB) to avoid stack overflow.
 - Use `stackalloc` with `Span<T>`; avoid unsafe pointer arithmetic.
 - Prefer `stackalloc` over pooled arrays for short-lived, small buffers.
@@ -1499,13 +1477,45 @@ await foreach (var order in orderService.StreamOrdersAsync(ct))
 ```
 
 Guidelines:
+
 - Use `IAsyncEnumerable<T>` for paginated or streamed data instead of `Task<List<T>>`.
 - Apply `[EnumeratorCancellation]` to ensure cancellation tokens flow correctly.
 - Avoid materializing `IAsyncEnumerable<T>` into a list unless the consumer requires random access.
 
+## Object Pooling
+
+For hot paths that allocate heavily, use `ArrayPool<T>` and `ObjectPool<T>` to reduce GC pressure.
+
+```csharp
+public sealed class OrderBufferWriter
+{
+    private static readonly ArrayPool<byte> Pool = ArrayPool<byte>.Shared;
+
+    public void WriteOrders(ReadOnlySpan<Order> orders, IBufferWriter<byte> output)
+    {
+        var buffer = Pool.Rent(4096);
+        try
+        {
+            // Write to buffer
+        }
+        finally
+        {
+            Pool.Return(buffer, clearArray: true);
+        }
+    }
+}
+```
+
+Guidelines:
+
+- Always return rented arrays, even on exception paths; use `try/finally`.
+- Set `clearArray: true` for buffers that contain sensitive data.
+- Prefer `ObjectPool<T>` for short-lived object reuse over repeated `new` allocations.
+- Do not pool objects that hold unmanaged resources or have complex disposal requirements.
+
 ---
 
-# Nullable Reference Types
+## Nullable Reference Types
 
 Enable nullable reference types (`<Nullable>enable</Nullable>`) in all projects. This shifts null safety from runtime exceptions to compile-time warnings.
 
@@ -1524,6 +1534,7 @@ public sealed class User
 ```
 
 Guidelines:
+
 - Default to non-nullable. Only mark `?` when `null` is a meaningful, expected state.
 - Use `null` for optional or missing values, not magic strings like `""`.
 - Always check for `null` before dereferencing nullable references, or use the null-forgiving operator `!` only when the compiler cannot prove non-nullability but you can.
@@ -1552,6 +1563,7 @@ public string GetUppercase(string? name)
 ```
 
 Guidelines:
+
 - Prefer explicit null checks or `??` fallback over `!`.
 - Use `!` only after validation or when the framework guarantees non-null (e.g., `ArgumentNullException.ThrowIfNull`).
 
@@ -1570,6 +1582,7 @@ public sealed class Order
 ```
 
 Guidelines:
+
 - Use `DateTimeOffset?` instead of `DateTimeOffset.MinValue` for optional dates.
 - Use `int?` instead of sentinel values like `-1` for optional integers.
 
@@ -1583,17 +1596,18 @@ When enabling nullable reference types on an existing codebase:
 4. Remove `#nullable disable` as each section is migrated.
 
 Guidelines:
+
 - Do not globally disable nullable reference types.
 - Do not add `?` to every reference type to silence warnings; this defeats the purpose.
 - Treat nullable warnings as errors in CI.
 
 ---
 
-# Modern C# Disposal Patterns
+## Modern C# Disposal Patterns
 
 Use modern disposal patterns to ensure deterministic resource cleanup, especially in async code. Prefer `IAsyncDisposable`, `using` declarations, and safe null-coalescing disposal.
 
-## IAsyncDisposable
+### IAsyncDisposable
 
 Implement `IAsyncDisposable` when cleanup involves async I/O (e.g., flushing streams, closing connections).
 
@@ -1652,7 +1666,7 @@ Guidelines:
 - Use `await using var` for `IAsyncDisposable` types.
 - Avoid nesting `using` declarations too deeply; extract methods if disposal becomes complex.
 
-## Safe Null-Coalescing Disposal
+### Safe Null-Coalescing Disposal
 
 Dispose nested dependencies safely without null checks cluttering `Dispose` methods.
 
@@ -1680,7 +1694,41 @@ Guidelines:
 
 ---
 
-# Architecture
+## TimeProvider Abstraction
+
+Never use `DateTime.UtcNow`, `DateTimeOffset.UtcNow`, or `Task.Delay` directly in business logic. Inject `TimeProvider` for deterministic testing and time-based operations.
+
+```csharp
+public sealed class OrderProcessor(TimeProvider timeProvider)
+{
+    public void Process()
+    {
+        var now = timeProvider.GetUtcNow();
+    }
+
+    public ITimer CreateExpiryTimer(TimerCallback callback)
+    {
+        return timeProvider.CreateTimer(callback, null, TimeSpan.FromMinutes(5), TimeSpan.Zero);
+    }
+}
+```
+
+Registration:
+
+```csharp
+builder.Services.AddSingleton(TimeProvider.System);
+```
+
+Guidelines:
+
+- Register `TimeProvider.System` in DI by default.
+- Use `timeProvider.GetUtcNow()` instead of `DateTimeOffset.UtcNow`.
+- Use `timeProvider.CreateTimer()` for testable recurring timers.
+- Never use `DateTime.Now` in server code.
+
+---
+
+## Architecture
 
 ## General
 
@@ -1735,7 +1783,42 @@ tests/
 
 ---
 
-# Service Naming Conventions
+## Central Package Management
+
+For multi-project solutions, use Central Package Management (CPM) to lock dependency versions centrally and prevent transitive version conflicts.
+
+```xml
+<!-- Directory.Packages.props -->
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="9.0.0" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.0" />
+  </ItemGroup>
+</Project>
+```
+
+```xml
+<!-- MyProject.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+  </ItemGroup>
+</Project>
+```
+
+Guidelines:
+
+- Never declare versions in individual `.csproj` files.
+- Audit `Directory.Packages.props` quarterly for CVEs.
+- Use `Directory.Build.props` for shared MSBuild properties across all projects.
+- Keep CPM enabled at the solution root.
+
+---
+
+## Service Naming Conventions
 
 ## Assembly Naming
 
@@ -1777,7 +1860,7 @@ trading-service-pricing
 trading-service-execution
 ```
 
-## Service Identifier
+### Service Identifier
 
 - Each service must define a stable, unique service name constant.
 - Use this identifier for logging, tracing, and service discovery.
@@ -1791,7 +1874,7 @@ public static class ServiceDefaults
 
 ---
 
-# Event-Driven Architecture
+## Event-Driven Architecture
 
 ## Communication Style
 
@@ -1843,15 +1926,15 @@ public sealed class OrderCreatedHandler : IEventHandler<OrderCreatedEvent>
 
 ---
 
-# Service-Oriented Architecture
+## Service-Oriented Architecture
 
-## Service Boundaries
+### Service Boundaries
 
 - Align service boundaries with business capabilities (bounded contexts).
 - Each service owns its data exclusively; no shared databases between services.
 - Avoid distributed transactions; use eventual consistency and sagas.
 
-## Service Contracts
+### Service Contracts
 
 - Expose minimal surface area.
 - Use stable, coarse-grained contracts.
@@ -1869,9 +1952,36 @@ public interface IInventoryClient
 }
 ```
 
+## Anti-Corruption Layer
+
+When integrating with external services or legacy systems, build an explicit ACL to translate external contracts into your domain language and protect your bounded context from leakage.
+
+```csharp
+public interface ILegacyOrderClient { /* external contract */ }
+
+public sealed class LegacyOrderAdapter(
+    ILegacyOrderClient client,
+    ILogger<LegacyOrderAdapter> logger) : IOrderSource
+{
+    public async Task<Order> GetOrderAsync(OrderId id, CancellationToken ct)
+    {
+        var dto = await client.GetRawAsync(id.Value, ct);
+        // Translate, validate, sanitize
+        return MapToDomain(dto);
+    }
+}
+```
+
+Guidelines:
+
+- The ACL owns all translation and validation of external data.
+- Never reference external DTOs in application or domain layers.
+- Keep the adapter thin; it should not contain business logic, only mapping and validation.
+- Define explicit interfaces (`IOrderSource`) so the domain depends on abstractions.
+
 ---
 
-# Domain-Driven Design
+## Domain-Driven Design
 
 ## Business Logic
 
@@ -1962,7 +2072,7 @@ Avoid coupling domain logic directly to infrastructure concerns.
 
 ---
 
-# Resilience and Reliability
+## Resilience and Reliability
 
 ## Retry Policies
 
@@ -2107,7 +2217,7 @@ Guidelines:
 
 ---
 
-# ASP.NET Core Standards
+## ASP.NET Core
 
 ## API Style
 
@@ -2194,6 +2304,32 @@ services.AddPersistence();
 services.AddInfrastructure();
 ```
 
+### Keyed Services
+
+When multiple implementations of the same interface are registered, use keyed services instead of marker interfaces or factory delegates.
+
+Registration:
+
+```csharp
+builder.Services.AddKeyedSingleton<ICacheStore, RedisCacheStore>("redis");
+builder.Services.AddKeyedSingleton<ICacheStore, InMemoryCacheStore>("memory");
+```
+
+Usage:
+
+```csharp
+public sealed class ProductService(
+    [FromKeyedServices("redis")] ICacheStore cache)
+{
+}
+```
+
+Guidelines:
+
+- Prefer keyed services over `IEnumerable<T>` resolution when only one instance is needed per consumer.
+- Use `FromKeyedServicesAttribute` in constructors.
+- Avoid keyed services when a single default implementation is sufficient; use standard registration instead.
+
 ---
 
 ## Configuration
@@ -2208,6 +2344,71 @@ services.Configure<JwtOptions>(
 ```
 
 Avoid magic strings throughout the application.
+
+### Options Pattern
+
+Prefer dedicated ConfigureOptions classes using IConfigureOptions<T>.
+
+```csharp
+public sealed class JwtOptions
+{
+    public required string Issuer { get; init; }
+    public required string Audience { get; init; }
+}
+```
+
+```csharp
+public sealed class ConfigureJwtOptions
+    : IConfigureOptions<JwtOptions>
+{
+    private readonly IConfiguration _configuration;
+
+    /// <summary>
+    /// Initializes a new instance of the ConfigureJwtOptions class.
+    /// </summary>
+    /// <param name="configuration">Application configuration.</param>
+    public ConfigureJwtOptions(
+        IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
+    /// <summary>
+    /// Configures JWT options.
+    /// </summary>
+    /// <param name="options">The options instance.</param>
+    public void Configure(JwtOptions options)
+    {
+        _configuration
+            .GetSection("Jwt")
+            .Bind(options);
+    }
+}
+```
+
+Registration:
+
+```csharp
+services.AddSingleton<
+    IConfigureOptions<JwtOptions>,
+    ConfigureJwtOptions>();
+```
+
+Avoid:
+
+```csharp
+services.Configure<JwtOptions>(
+    configuration.GetSection("Jwt"));
+```
+
+Guidelines:
+
+- Prefer IConfigureOptions<T> implementations.
+- Keep configuration binding in a single location.
+- Prefer strongly typed options.
+- Avoid magic configuration keys throughout the application.
+- Inject IOptions<T>, IOptionsSnapshot<T>, or IOptionsMonitor<T>.
+- Keep Program.cs focused on composition rather than implementation details.
 
 ---
 
@@ -2250,7 +2451,7 @@ public static partial class LoggingExtensions
 }
 ```
 
-## Distributed Tracing
+### Distributed Tracing
 
 - Propagate correlation IDs (`traceparent`, `correlation-id`) across all events and HTTP calls.
 - Include correlation IDs in every log entry and event metadata.
@@ -2383,6 +2584,7 @@ app.MapControllers();
 ```
 
 Guidelines:
+
 - Register `UseExceptionHandler` early to catch exceptions from downstream middleware.
 - Register `UseAuthentication` and `UseAuthorization` before endpoints that require auth.
 - Register `UseOutputCache` after auth so cached responses respect identity.
@@ -2419,6 +2621,7 @@ services.AddControllers(options =>
 ```
 
 Guidelines:
+
 - Prefer middleware for global concerns; use filters when the concern only applies to MVC/minimal API routes.
 - Keep filters stateless; use constructor injection for dependencies.
 - Do not perform business logic inside filters.
@@ -2460,13 +2663,14 @@ services.AddProblemDetails();
 ```
 
 Guidelines:
+
 - Use `IExceptionHandler` (.NET 8+) over custom middleware when possible.
 - Never expose stack traces or sensitive details in production responses.
 - Always log the full exception with correlation IDs before returning a sanitized response.
 
 ---
 
-# Worker Services
+## Worker Services
 
 Worker services are headless, non-HTTP applications designed for long-running background processing, scheduled tasks, event consumers, and message-driven workflows. They run independently of any web API and are deployed as separate processes.
 
@@ -2614,7 +2818,7 @@ Guidelines:
 
 ---
 
-# System.Threading.Channels
+### System.Threading.Channels
 
 `System.Threading.Channels` provides a bounded or unbounded queue for producer-consumer scenarios, especially useful for backpressure-aware processing pipelines.
 
@@ -2653,6 +2857,7 @@ public sealed class OrderProcessor
 ```
 
 Guidelines:
+
 - Use `CreateBounded` when memory is constrained or backpressure is required.
 - Set `FullMode` to `Wait` rather than dropping items.
 - Use `CreateUnbounded` only when memory is not a concern and dropping is unacceptable.
@@ -2660,7 +2865,7 @@ Guidelines:
 
 ---
 
-# Caching
+## Caching
 
 Prefer `IMemoryCache` for short-lived, per-process caches. Use `IDistributedCache` for multi-node environments.
 
@@ -2782,6 +2987,7 @@ public async Task<ActionResult<ProductDto>> GetProduct(Guid id)
 ```
 
 Guidelines:
+
 - Use `ResponseCache` for static or rarely changing data.
 - Set `VaryByQueryKeys` when the response depends on query parameters.
 - Do not use response caching for authenticated or user-specific data without `VaryByHeader` for Authorization.
@@ -2827,6 +3033,7 @@ public async Task<ActionResult<ProductDto>> CreateProduct(CreateProductRequest r
 ```
 
 Guidelines:
+
 - Prefer `OutputCache` over `ResponseCache` for ASP.NET Core server-side caching.
 - Use cache tags for logical grouping and bulk invalidation.
 - Configure `OutputCache` after `UseAuthentication` so cached entries respect the user identity.
@@ -2834,7 +3041,7 @@ Guidelines:
 
 ---
 
-# Rate Limiting
+## Rate Limiting
 
 Use ASP.NET Core rate limiting to protect endpoints from abuse and ensure fair resource usage.
 
@@ -2872,7 +3079,7 @@ Guidelines:
 
 ---
 
-# OpenAPI
+## OpenAPI
 
 Generate OpenAPI documentation automatically from controllers and minimal APIs. Use attributes or extension methods to enrich schemas.
 
@@ -2896,7 +3103,7 @@ Guidelines:
 
 ---
 
-# Feature Flags
+## Feature Flags
 
 Use feature flags to decouple deployment from release. Prefer a typed, strongly flagged approach rather than raw string checks.
 
@@ -2931,7 +3138,7 @@ Guidelines:
 
 ---
 
-# CQRS
+## CQRS
 
 Separate commands (writes) from queries (reads) using distinct models and handlers. This keeps read and write concerns independent and optimisable.
 
@@ -2982,7 +3189,7 @@ Guidelines:
 
 ---
 
-# System.Text.Json
+### System.Text.Json
 
 Use `System.Text.Json` for all serialization. It is built-in, faster than Newtonsoft.Json, and integrates natively with ASP.NET Core.
 
@@ -3037,7 +3244,7 @@ public abstract class DomainEvent
 }
 ```
 
-## Source Generators
+### Source Generators
 
 For high-performance scenarios or ahead-of-time compilation, use source generators to avoid runtime reflection.
 
@@ -3065,7 +3272,7 @@ Guidelines:
 
 ---
 
-# gRPC
+## gRPC
 
 Use gRPC for high-performance, contract-first communication between internal services. gRPC is well-suited for service-to-service calls where both endpoints are under your control.
 
@@ -3105,11 +3312,12 @@ message OrderDto {
 ```
 
 Guidelines:
+
 - Keep proto contracts in a shared project or NuGet package consumed by both client and server.
 - Use `string` for GUIDs in protobuf; map to `Guid` in C# via converters.
 - Avoid breaking changes; prefer additive evolution.
 
-## Server Registration
+### Server Registration
 
 ```csharp
 builder.Services.AddGrpc();
@@ -3129,17 +3337,149 @@ services.AddGrpcClient<IOrderServiceClient>("orders", options =>
 ```
 
 Guidelines:
+
 - Use `AddGrpcClient` for typed gRPC clients with `IHttpClientFactory` integration.
 - Add message handlers for service identity when calling between services.
 - Configure deadline/timeout on individual calls, not globally.
 
 ---
 
-# Server-Sent Events
+### SignalR
+
+Use SignalR for real-time, bidirectional communication between server and client. It is ideal for scenarios requiring server-initiated pushes, client-to-server messages, or connection state management.
+
+## When to Use SignalR
+
+Prefer SignalR when:
+
+- Real-time updates must be pushed from server to connected clients (e.g., dashboards, notifications).
+- Bidirectional messaging is required between client and server.
+- Connection lifecycle management (reconnect, groups, users) is needed.
+
+Avoid SignalR for:
+
+- Unidirectional server-to-client streaming where SSE or `IAsyncEnumerable` HTTP responses suffice.
+- Service-to-service communication; prefer gRPC or messaging.
+- Extremely high-frequency broadcast scenarios where raw WebSocket or UDP may be more appropriate.
+
+## Hub Design
+
+Keep hubs thin and focused on connection concerns. Business logic belongs in application services.
+
+```csharp
+public sealed class OrderHub : Hub<IOrderClient>
+{
+    private readonly IOrderService _orderService;
+
+    public OrderHub(IOrderService orderService)
+    {
+        _orderService = orderService;
+    }
+
+    public async Task JoinOrderGroup(Guid orderId)
+    {
+        await Groups.AddToGroupAsync(Context.ConnectionId, orderId.ToString());
+    }
+
+    public async Task UpdateOrderStatus(Guid orderId, string status)
+    {
+        var result = await _orderService.UpdateStatusAsync(orderId, status, Context.ConnectionAborted);
+
+        if (result.IsSuccess)
+        {
+            await Clients.Group(orderId.ToString()).OrderStatusChanged(orderId, status);
+        }
+    }
+}
+```
+
+```csharp
+public interface IOrderClient
+{
+    Task OrderStatusChanged(Guid orderId, string status);
+}
+```
+
+Guidelines:
+
+- Hubs should delegate to application-layer services.
+- Do not perform business logic directly inside hub methods.
+- Use strongly typed hub interfaces (`Hub<T>`) for compile-time safety.
+
+### Scaling with Backplane
+
+When running multiple server instances, use a backplane to synchronize messages across nodes.
+
+```csharp
+builder.Services.AddSignalR()
+    .AddStackExchangeRedis("connectionString");
+```
+
+Guidelines:
+
+- Use a Redis or Azure Service Bus backplane for multi-node deployments.
+- Avoid in-memory scaleout in production.
+- Ensure connection affinity (sticky sessions) is not required when using a backplane.
+
+## Connection Management
+
+Use groups for broadcast scoping and user identifiers for targeted delivery.
+
+```csharp
+await Groups.AddToGroupAsync(Context.ConnectionId, "admins");
+await Clients.User(userId).SendAsync("Notification", message);
+```
+
+Guidelines:
+
+- Use groups for logical broadcast channels, not for security boundaries.
+- Validate permissions before adding a connection to a privileged group.
+- Do not rely on `Context.UserIdentifier` without authentication configured.
+
+### Security
+
+Authenticate SignalR connections and validate all hub method inputs.
+
+```csharp
+builder.Services.AddAuthentication()
+    .AddJwtBearer(options =>
+    {
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(accessToken))
+                {
+                    context.Token = accessToken;
+                }
+
+                return Task.CompletedTask;
+            }
+        };
+    });
+```
+
+```csharp
+[Authorize]
+public sealed class OrderHub : Hub<IOrderClient>
+{
+}
+```
+
+Guidelines:
+
+- Apply `[Authorize]` to hubs or individual methods as needed.
+- Pass JWT tokens via query string for WebSocket transports; validate them in `OnMessageReceived`.
+- Validate and sanitize all inputs received from clients; never trust client-provided identifiers without server-side verification.
+
+---
+
+### Server-Sent Events
 
 Server-Sent Events (SSE) provide a lightweight, text-based streaming mechanism from server to client over standard HTTP. They are ideal for pushing real-time updates to a web client.
 
-## SSE with IAsyncEnumerable
+### SSE with IAsyncEnumerable
 
 In .NET 8+, ASP.NET Core can stream `IAsyncEnumerable<T>` responses directly as `text/event-stream`.
 
@@ -3183,7 +3523,7 @@ app.MapControllers();
 
 The `[EnumeratorCancellation]` attribute ensures the `CancellationToken` is passed to the underlying enumerator, allowing the stream to stop when the client disconnects.
 
-### Service Layer
+#### Service Layer
 
 ```csharp
 public sealed class OrderStatusService
@@ -3221,9 +3561,9 @@ Guidelines:
 
 ---
 
-# Authentication & Authorization
+## Authentication & Authorization
 
-## JWT Authentication
+### JWT Authentication
 
 Use JWT bearer tokens for stateless authentication in ASP.NET Core APIs. Prefer short-lived access tokens with longer-lived refresh tokens.
 
@@ -3275,6 +3615,7 @@ public sealed class ConfigureJwtBearerOptions : IConfigureOptions<JwtBearerOptio
 ```
 
 Guidelines:
+
 - Use strongly typed `JwtOptions` bound from configuration.
 - Never store signing keys in source control; use secret management.
 - Set short token expiry (15 minutes typical for access tokens).
@@ -3335,6 +3676,7 @@ public async Task<ActionResult<OrderDto>> CreateOrder(CreateOrderRequest request
 ```
 
 Guidelines:
+
 - Prefer policies over direct `[Authorize(Roles = "...")]` attributes.
 - Derive permissions from claims in the token rather than hardcoding roles.
 - Use `IAuthorizationService` for resource-based authorization when decisions depend on the data being accessed.
@@ -3372,6 +3714,7 @@ services.AddHttpClient<IInventoryClient, InventoryClient>()
 ```
 
 Guidelines:
+
 - Never trust events from external services without validation.
 - Use short-lived service tokens rotated automatically.
 - Validate service identity in addition to user identity at API boundaries.
@@ -3379,11 +3722,11 @@ Guidelines:
 
 ---
 
-# HttpClient & IHttpClientFactory
+## HttpClient & IHttpClientFactory
 
 Use `IHttpClientFactory` for all HTTP calls. It manages `HttpClient` lifetime, avoids socket exhaustion, and supports named/typed clients with middleware pipelines.
 
-## Named Clients
+### Named Clients
 
 Register named clients for specific downstream services.
 
@@ -3415,7 +3758,7 @@ public sealed class InventoryClient
 }
 ```
 
-## Typed Clients
+### Typed Clients
 
 Prefer typed clients when a service always uses the same configuration.
 
@@ -3451,6 +3794,7 @@ services.AddHttpClient<IInventoryClient, InventoryClient>()
 ```
 
 Guidelines:
+
 - Never create `HttpClient` with `new HttpClient()` directly; always use `IHttpClientFactory`.
 - Use typed clients for service-specific wrappers; named clients for ad-hoc calls.
 - Keep `DelegatingHandler` stateless and focused on a single concern.
@@ -3458,7 +3802,7 @@ Guidelines:
 
 ---
 
-# Distributed Tracing
+### Distributed Tracing - Middleware
 
 Propagate correlation IDs (`traceparent`, `correlation-id`) across all events and HTTP calls. Include correlation IDs in every log entry and event metadata.
 
@@ -3491,6 +3835,7 @@ public sealed record OrderCreatedEvent
 ```
 
 Guidelines:
+
 - Use `ActivitySource` and `Activity` for spans; avoid manual string concatenation.
 - Propagate `traceparent` header in HTTP calls and event metadata.
 - Include correlation IDs in all structured logs for end-to-end request tracking.
@@ -3498,7 +3843,7 @@ Guidelines:
 
 ---
 
-# Persistence Standards
+## Persistence Guidlines
 
 ## Entity Framework Core
 
@@ -3610,6 +3955,7 @@ services.AddDbContext<AppDbContext>(options =>
 ```
 
 Guidelines:
+
 - Keep interceptors focused on a single concern.
 - Avoid heavy computation inside interceptors; they run on every `SaveChanges`.
 - Use `SaveChangesInterceptor` for auditing and soft deletes.
@@ -3637,6 +3983,7 @@ public async Task<List<OrderSummary>> GetOrderSummariesAsync(CancellationToken c
 ```
 
 Guidelines:
+
 - Always use parameterized queries; never concatenate user input into SQL strings.
 - Prefer LINQ for simple queries; use raw SQL for complex aggregations or window functions.
 - Map raw SQL results to DTOs, not entities, to avoid tracking issues.
@@ -3662,11 +4009,12 @@ public sealed class AppDbContext : DbContext
 ```
 
 Guidelines:
+
 - Use global filters for soft deletes and tenant scoping.
 - Override filters explicitly when needed using `IgnoreQueryFilters()`.
 - Do not rely on global filters for security-critical access control; validate permissions explicitly.
 
-### Split Queries
+#### Split Queries
 
 Use `AsSplitQuery()` for queries that join many collections to avoid Cartesian explosion.
 
@@ -3681,6 +4029,7 @@ public async Task<List<Order>> GetOrdersWithItemsAsync(CancellationToken ct = de
 ```
 
 Guidelines:
+
 - Use split queries when including multiple one-to-many relationships.
 - Avoid split queries for simple queries with a single join; prefer single-query execution.
 - Profile query performance to determine the best strategy.
@@ -3701,13 +4050,14 @@ services.AddDbContext<AppDbContext>(options =>
 ```
 
 Guidelines:
+
 - Use compiled models for large models or cold-start-sensitive applications.
 - Regenerate compiled models after any model or configuration change.
 - Do not use compiled models during active development; enable for production builds.
 
 ---
 
-# Testing Standards
+## Testing Standards
 
 ## Frameworks
 
@@ -3799,7 +4149,7 @@ public void CreateUser_Should_ReturnUser_When_RequestIsValid()
 }
 ```
 
-### System Under Test
+#### System Under Test
 
 Name the variable holding the class being tested `sut`. This makes the target of the test immediately obvious.
 
@@ -3822,6 +4172,9 @@ public void CancelOrder_Should_SetStatusToCancelled_When_OrderIsPending()
 - Use factory methods or builders for test data setup.
 - Avoid shared mutable state between tests.
 - Mock external dependencies at service boundaries only.
+- Prefer fakes and in-memory implementations over mocks for repositories and external clients.
+- Do not test internal implementation details; test observable behaviour and outcomes.
+- Keep unit tests fast and isolated; they should not require a database, file system, or network.
 
 ```csharp
 public static class TestData
@@ -3919,7 +4272,7 @@ public sealed class CustomWebApplicationFactory<TProgram> : WebApplicationFactor
 }
 ```
 
-### Shared Test Fixture
+#### Shared Test Fixture
 
 Use a generic test fixture for NUnit that creates the factory once per test run and provides a shared `HttpClient`.
 
@@ -3968,14 +4321,39 @@ public class OrdersApiTests : TestFixture<Program>
 ```
 
 Guidelines:
+
 - Keep integration tests focused on infrastructure and boundary behaviour, not domain logic.
 - Reset database state between tests to avoid leakage.
 - Use `OneTimeSetUp` / `OneTimeTearDown` for expensive shared resources like Testcontainers.
 - Contract tests should validate message shapes and expected responses, not internal implementations.
 
+## Architecture Testing
+
+Prevent architectural drift by encoding layer dependency rules as automated tests.
+
+```csharp
+[Test]
+public void Domain_Should_Not_Depend_On_Infrastructure()
+{
+    ArchRuleAssert.FailureReportOf(
+        Types().That().ResideInNamespace("MyApp.Domain")
+            .Should().NotDependOnAny(
+                Types().That().ResideInNamespace("MyApp.Infrastructure")))
+        .Check(Architecture);
+}
+```
+
+Guidelines:
+
+- Use ArchUnitNET or TngTech.ArchUnit to enforce dependency direction.
+- Run architecture tests in CI on every build.
+- Enforce that `Domain` does not reference `Application`, `Infrastructure`, or `Api`.
+- Verify that feature folders do not create circular dependencies.
+- Treat architecture tests as first-class tests; they should fail the build on violation.
+
 ---
 
-# Security Standards
+### Security Standards
 
 - Validate all external input.
 - Use parameterized database queries.
@@ -4005,7 +4383,7 @@ public sealed class CreateUserRequestValidator : AbstractValidator<CreateUserReq
 }
 ```
 
-## Secrets Management
+### Secrets Management
 
 Never hardcode secrets. Use the options pattern with environment-specific configuration.
 
@@ -4044,7 +4422,7 @@ public sealed class IntegrationEventValidator<T> : IEventValidator<T> where T : 
 
 ---
 
-# Metrics & OpenTelemetry
+## Metrics & OpenTelemetry
 
 Use `IMeterFactory` and `System.Diagnostics.Metrics` for application metrics. Instrument code with counters, histograms, and gauges, then export via OpenTelemetry.
 
@@ -4115,6 +4493,7 @@ builder.Services.AddOpenTelemetry()
 ```
 
 Guidelines:
+
 - Use `IMeterFactory` rather than creating `Meter` instances directly; it respects DI scoping and disposal.
 - Name meters with the service or feature they represent.
 - Add units and descriptions to instruments for clarity in dashboards.
@@ -4123,17 +4502,17 @@ Guidelines:
 
 ---
 
-# SonarQube Overview
+## SonarQube Overview
 
 All code must pass SonarQube analysis. The following sections catalogue the SonarQube C# rules organized by type: **Bugs**, **Vulnerabilities**, **Code Smells**, and **Security Hotspots**. Each rule includes a severity, a description, a noncompliant example, and the preferred compliant solution. Agents must ensure generated code adheres to these rules.
 
 ---
 
-# Bugs
+## Bugs
 
 Rules that detect coding mistakes resulting in unexpected behaviour or crashes.
 
-## S2583: Conditionally executed code should be reachable
+### S2583: Conditionally executed code should be reachable
 
 **Severity:** Blocker  
 **Description:** Code inside a conditional block that will never be executed indicates a logical error. The condition is always `true` or `false` given the current state, making the branch unreachable.
@@ -4183,7 +4562,7 @@ public int Compute(int value)
 
 ---
 
-## S2589: Boolean expressions should not be gratuitous
+### S2589: Boolean expressions should not be gratuitous
 
 **Severity:** Major  
 **Description:** Boolean expressions that are always `true` or always `false` are dead code and usually indicate a logical error.
@@ -4214,7 +4593,7 @@ public void Process(string value)
 
 ---
 
-## S1764: Identical expressions should not be used on both sides of a binary operator
+### S1764: Identical expressions should not be used on both sides of a binary operator
 
 **Severity:** Critical  
 **Description:** Using the same variable on both sides of an operator (`a == a`, `a - a`) is either a mistake or pointless and should be removed.
@@ -4239,7 +4618,7 @@ public int Calculate(int a, int b)
 
 ---
 
-## S1145: Useless `if(true)` and `if(false)` checks should be removed
+### S1145: Useless `if(true)` and `if(false)` checks should be removed
 
 **Severity:** Major  
 **Description:** Conditions that are hard-coded to `true` or `false` are dead code and should be simplified.
@@ -4267,7 +4646,7 @@ public void DoWork()
 
 ---
 
-## S2184: Casting should not be performed on operands of a division before the division is performed
+### S2184: Casting should not be performed on operands of a division before the division is performed
 
 **Severity:** Major  
 **Description:** Casting an operand to a narrower type before division can cause truncation and incorrect results. Cast the result of the division instead.
@@ -4293,7 +4672,7 @@ public double GetAverage(int total, int count)
 
 ---
 
-## S2187: TestCases should be defined for generic test classes
+### S2187: TestCases should be defined for generic test classes
 
 **Severity:** Critical  
 **Description:** Generic test classes without concrete `TestCase` type arguments cannot be instantiated by test runners.
@@ -4313,7 +4692,7 @@ public class StringTests<T> { }
 
 ---
 
-## S2197: Modulus results should not be checked for direct equality
+### S2197: Modulus results should not be checked for direct equality
 
 **Severity:** Major  
 **Description:** Checking `x % y == z` when `z` is not `0` or `y-1` is suspicious because modulus results are bounded to `[0, y-1]`.
@@ -4338,7 +4717,7 @@ public bool IsValid(int value)
 
 ---
 
-## S2201: Return values from `System.Linq.Enumerable` should not be ignored
+### S2201: Return values from `System.Linq.Enumerable` should not be ignored
 
 **Severity:** Major  
 **Description:** LINQ methods return a new sequence and do not modify the source. Ignoring the return value means the operation had no effect.
@@ -4363,7 +4742,7 @@ public List<int> Filter(List<int> items)
 
 ---
 
-## S2259: Null pointers should not be dereferenced
+### S2259: Null pointers should not be dereferenced
 
 **Severity:** Blocker  
 **Description:** Dereferencing a variable that is known to be `null` will cause a `NullReferenceException`.
@@ -4393,7 +4772,7 @@ public int GetLength(string value)
 
 ---
 
-## S2757: `=+` should not be used instead of `+=`
+### S2757: `=+` should not be used instead of `+=`
 
 **Severity:** Critical  
 **Description:** Writing `a =+ b` assigns the unary-positive of `b` to `a` instead of adding `b` to `a`.
@@ -4418,7 +4797,7 @@ public void Accumulate(int total, int value)
 
 ---
 
-## S3168: `async` methods should not return `void`
+### S3168: `async` methods should not return `void`
 
 **Severity:** Critical  
 **Description:** `async void` methods cannot be awaited and exceptions thrown inside them crash the process.
@@ -4443,7 +4822,7 @@ public async Task ProcessAsync()
 
 ---
 
-## S3172: `GetHashCode` should not reference mutable fields
+### S3172: `GetHashCode` should not reference mutable fields
 
 **Severity:** Critical  
 **Description:** If a field used in `GetHashCode` changes while the object is stored in a hash-based collection, the object becomes unreachable.
@@ -4478,7 +4857,7 @@ public sealed class User
 
 ---
 
-## S3215: `GetType()` should not be called on `System.Type` instances
+### S3215: `GetType()` should not be called on `System.Type` instances
 
 **Severity:** Major  
 **Description:** Calling `GetType()` on a `System.Type` instance returns `typeof(Type)` rather than the represented type.
@@ -4503,7 +4882,7 @@ public bool IsString(Type type)
 
 ---
 
-## S3244: Anonymous delegates should not be used to unsubscribe from events
+### S3244: Anonymous delegates should not be used to unsubscribe from events
 
 **Severity:** Major  
 **Description:** Unsubscribing an anonymous delegate that is not the exact same instance does nothing.
@@ -4524,7 +4903,7 @@ eventHandler -= handler;
 
 ---
 
-## S3443: `Format` strings should be used correctly
+### S3443: `Format` strings should be used correctly
 
 **Severity:** Major  
 **Description:** Passing a composite format string as an argument to another `string.Format` can cause incorrect placeholder indexing.
@@ -4549,7 +4928,7 @@ public string BuildMessage(string name)
 
 ---
 
-## S3464: `Assembly.GetCallingAssembly()` should not be used in `async` methods
+### S3464: `Assembly.GetCallingAssembly()` should not be used in `async` methods
 
 **Severity:** Major  
 **Description:** In `async` methods, the calling assembly is the framework rather than the expected caller.
@@ -4574,7 +4953,7 @@ public void DoWork()
 
 ---
 
-## S3655: `Nullable` value should be accessed only when it is known to be non-null
+### S3655: `Nullable` value should be accessed only when it is known to be non-null
 
 **Severity:** Blocker  
 **Description:** Accessing `Value` on a nullable when it is known to be null throws `InvalidOperationException`.
@@ -4604,7 +4983,7 @@ public int GetValue(int? value)
 
 ---
 
-## S3880: `NetDataContractSerializer` should not be used
+### S3880: `NetDataContractSerializer` should not be used
 
 **Severity:** Blocker  
 **Description:** This serializer is insecure and can execute arbitrary code during deserialization.
@@ -4623,7 +5002,7 @@ var serializer = new DataContractSerializer(typeof(MyType));
 
 ---
 
-## S3984: `Exception` should not be created without being thrown
+### S3984: `Exception` should not be created without being thrown
 
 **Severity:** Major  
 **Description:** Creating an exception but not throwing it is almost always a mistake.
@@ -4651,7 +5030,7 @@ public void Validate(string value)
 
 ---
 
-## S4143: Collection elements should not be replaced unconditionally
+### S4143: Collection elements should not be replaced unconditionally
 
 **Severity:** Major  
 **Description:** Adding an item to a dictionary with the same key twice means the second write overwrites the first unconditionally.
@@ -4673,7 +5052,7 @@ map["key"] = 2;
 
 ---
 
-## S4462: `Task.Wait` should not be called in an `async` method
+### S4462: `Task.Wait` should not be called in an `async` method
 
 **Severity:** Major  
 **Description:** Calling `Task.Wait` or `Task.Result` in an async method causes a deadlock in many contexts and defeats the purpose of `async`/`await`.
@@ -4699,7 +5078,7 @@ public async Task ProcessAsync()
 
 ---
 
-## S4581: `new Guid()` should not be used
+### S4581: `new Guid()` should not be used
 
 **Severity:** Critical  
 **Description:** `new Guid()` creates an all-zero GUID, which is almost never the intended behaviour.
@@ -4718,7 +5097,7 @@ var id = Guid.NewGuid();
 
 ---
 
-## S6612: The value of `bool` should not be negated more than once
+### S6612: The value of `bool` should not be negated more than once
 
 **Severity:** Major  
 **Description:** Multiple negations of a boolean are confusing and error-prone.
@@ -4743,7 +5122,7 @@ public bool IsNotInactive(bool active)
 
 ---
 
-## S6613: Casting to `float` should not be done before calling `Math.Floor`
+### S6613: Casting to `float` should not be done before calling `Math.Floor`
 
 **Severity:** Major  
 **Description:** Casting to `float` before `Math.Floor` loses precision. Use `Math.Floor(double)` or `MathF.Floor(float)`.
@@ -4768,11 +5147,11 @@ public int Round(float value)
 
 ---
 
-# Vulnerabilities
+## Vulnerabilities
 
 Rules that detect security weaknesses that can be exploited by attackers.
 
-## S3329: Cipher Block Chaining IVs should be unpredictable
+### S3329: Cipher Block Chaining IVs should be unpredictable
 
 **Severity:** Blocker  
 **Description:** Using a predictable or hardcoded IV in CBC mode encryption makes the ciphertext vulnerable to attacks.
@@ -4804,7 +5183,7 @@ public byte[] Encrypt(byte[] data, byte[] key)
 
 ---
 
-## S3330: Server-side requests should not be vulnerable to SSRF attacks
+### S3330: Server-side requests should not be vulnerable to SSRF attacks
 
 **Severity:** Blocker  
 **Description:** Server-Side Request Forgery occurs when user input is used to construct a request to an internal or external resource without validation.
@@ -4837,7 +5216,7 @@ public async Task<string> FetchData(string url)
 
 ---
 
-## S4423: Weak SSL/TLS protocols should not be used
+### S4423: Weak SSL/TLS protocols should not be used
 
 **Severity:** Blocker  
 **Description:** Using SSL 3.0, TLS 1.0, or TLS 1.1 exposes the application to known cryptographic attacks.
@@ -4862,7 +5241,7 @@ var handler = new HttpClientHandler
 
 ---
 
-## S4426: Cryptographic keys should not be too short
+### S4426: Cryptographic keys should not be too short
 
 **Severity:** Blocker  
 **Description:** Short keys are vulnerable to brute-force attacks. Use at least 2048-bit RSA or 256-bit elliptic curve keys.
@@ -4881,7 +5260,7 @@ using var rsa = RSA.Create(2048);
 
 ---
 
-## S4428: TempFileCollection should not be used
+### S4428: TempFileCollection should not be used
 
 **Severity:** Major  
 **Description:** `TempFileCollection` can create files with weak permissions. Use `Path.GetTempFileName` with explicit cleanup.
@@ -4908,7 +5287,7 @@ finally
 
 ---
 
-## S4784: Using regular expressions is security-sensitive
+### S4784: Using regular expressions is security-sensitive
 
 **Severity:** Critical  
 **Description:** Regular expressions can be vulnerable to ReDoS (Regular Expression Denial of Service) if user input is used without validation.
@@ -4938,7 +5317,7 @@ public bool IsValidEmail(string email)
 
 ---
 
-## S4787: Cryptographic keys should not be hardcoded
+### S4787: Cryptographic keys should not be hardcoded
 
 **Severity:** Blocker  
 **Description:** Hardcoded keys are exposed in source control and binaries. Use key management services or configuration.
@@ -4962,7 +5341,7 @@ public CryptoService(IOptions<CryptoOptions> options)
 
 ---
 
-## S4790: Hashing data is security-sensitive
+### S4790: Hashing data is security-sensitive
 
 **Severity:** Critical  
 **Description:** Weak hash algorithms like MD5 or SHA-1 are vulnerable to collision attacks. Use SHA-256 or stronger.
@@ -4989,7 +5368,7 @@ public byte[] Hash(string input)
 
 ---
 
-## S4818: Sockets should not be used in production code without proper validation
+### S4818: Sockets should not be used in production code without proper validation
 
 **Severity:** Major  
 **Description:** Raw socket access can bypass security controls. Validate all endpoints and use TLS.
@@ -5009,7 +5388,7 @@ await client.ConnectAsync("untrusted.com", 80);
 
 ---
 
-## S5324: `Random` should not be used for security-sensitive purposes
+### S5324: `Random` should not be used for security-sensitive purposes
 
 **Severity:** Blocker  
 **Description:** `System.Random` is predictable and should never be used for cryptography, tokens, or passwords.
@@ -5037,7 +5416,7 @@ public string GenerateToken()
 
 ---
 
-## S5542: Encryption algorithms should be used with secure mode and padding scheme
+### S5542: Encryption algorithms should be used with secure mode and padding scheme
 
 **Severity:** Blocker  
 **Description:** Using ECB mode or no padding exposes the ciphertext to attacks. Use CBC or GCM with proper IVs.
@@ -5059,7 +5438,7 @@ aes.GenerateIV();
 
 ---
 
-## S5547: Cipher algorithms should be robust
+### S5547: Cipher algorithms should be robust
 
 **Severity:** Blocker  
 **Description:** Weak or broken algorithms like DES, RC2, or TripleDES should not be used.
@@ -5078,7 +5457,7 @@ using var aes = Aes.Create();
 
 ---
 
-## S5659: SSL/TLS connection settings should not be bypassed
+### S5659: SSL/TLS connection settings should not be bypassed
 
 **Severity:** Blocker  
 **Description:** Disabling certificate validation exposes the application to man-in-the-middle attacks.
@@ -5097,7 +5476,7 @@ ServicePointManager.ServerCertificateValidationCallback = (sender, cert, chain, 
 
 ---
 
-## S5773: Types allowed to be deserialized should be limited
+### S5773: Types allowed to be deserialized should be limited
 
 **Severity:** Blocker  
 **Description:** Deserializing arbitrary types can lead to remote code execution. Whitelist allowed types.
@@ -5118,7 +5497,7 @@ var obj = formatter.Deserialize(stream);
 
 ---
 
-## S6419: Cryptographic keys should not be too short for the algorithm
+### S6419: Cryptographic keys should not be too short for the algorithm
 
 **Severity:** Blocker  
 **Description:** Using AES-128 is acceptable, but AES-256 is preferred. Using shorter keys than the algorithm supports causes vulnerabilities.
@@ -5141,11 +5520,11 @@ aes.KeySize = 256;
 
 ---
 
-# Code Smells
+## Code Smells
 
 Rules that detect maintainability issues, suspicious coding practices, and patterns that may lead to bugs or make code harder to understand and maintain.
 
-## S1075: URIs should not be hardcoded
+### S1075: URIs should not be hardcoded
 
 **Severity:** Minor  
 **Description:** Hardcoded URIs make the application inflexible and can expose internal endpoints in source control.
@@ -5170,7 +5549,7 @@ public string GetApiUrl(IOptions<ApiOptions> options)
 
 ---
 
-## S1116: Empty statements should be removed
+#### S1116: Empty statements should be removed
 
 **Severity:** Minor  
 **Description:** A stray semicolon creates an empty statement that can hide bugs and confuse readers.
@@ -5195,7 +5574,7 @@ public void DoWork()
 
 ---
 
-## S1121: Assignments should not be made from within sub-expressions
+#### S1121: Assignments should not be made from within sub-expressions
 
 **Severity:** Major  
 **Description:** Embedding an assignment inside another expression makes the code harder to read and can hide bugs.
@@ -5221,7 +5600,7 @@ public bool TryParse(string input, out int value)
 
 ---
 
-## S1125: Boolean literals should not be redundant
+#### S1125: Boolean literals should not be redundant
 
 **Severity:** Minor  
 **Description:** Expressions like `x == true` or `y == false` are redundant and should be simplified.
@@ -5246,7 +5625,7 @@ public bool IsValid(bool flag)
 
 ---
 
-## S1134: Track uses of `TODO` tags
+#### S1134: Track uses of `TODO` tags
 
 **Severity:** Info  
 **Description:** `TODO` comments indicate incomplete work. They should be tracked and resolved before merging.
@@ -5269,7 +5648,7 @@ public void Process()
 
 ---
 
-## S1135: Track uses of `FIXME` tags
+#### S1135: Track uses of `FIXME` tags
 
 **Severity:** Info  
 **Description:** `FIXME` comments indicate known defects. They should be tracked and resolved before merging.
@@ -5292,7 +5671,7 @@ public void Process()
 
 ---
 
-## S1147: Exit methods should not be called
+#### S1147: Exit methods should not be called
 
 **Severity:** Major  
 **Description:** Calling `Environment.Exit` or `Process.Kill` inside a library or web application abruptly terminates the process and loses data.
@@ -5317,7 +5696,7 @@ public void Shutdown(ILifetime lifetime)
 
 ---
 
-## S1155: `Any()` should be used to test for emptiness
+#### S1155: `Any()` should be used to test for emptiness
 
 **Severity:** Minor  
 **Description:** `Count() > 0` or `Count() == 0` is less efficient and less readable than `Any()` or `!Any()`.
@@ -5342,7 +5721,7 @@ public bool HasItems(IEnumerable<int> items)
 
 ---
 
-## S1168: Empty arrays and collections should be returned instead of `null`
+#### S1168: Empty arrays and collections should be returned instead of `null`
 
 **Severity:** Major  
 **Description:** Returning `null` for a collection forces every caller to add a null check. Return an empty collection instead.
@@ -5367,7 +5746,7 @@ public List<int> GetItems()
 
 ---
 
-## S1172: Unused method parameters should be removed
+#### S1172: Unused method parameters should be removed
 
 **Severity:** Minor  
 **Description:** Parameters that are never used add noise to the API and confuse callers.
@@ -5392,7 +5771,7 @@ public int Add(int a, int b)
 
 ---
 
-## S1186: Methods should not be empty
+#### S1186: Methods should not be empty
 
 **Severity:** Major  
 **Description:** Empty methods serve no purpose and should either be implemented or removed.
@@ -5416,7 +5795,7 @@ public void Validate()
 
 ---
 
-## S1199: Nested code blocks should not be used
+#### S1199: Nested code blocks should not be used
 
 **Severity:** Minor  
 **Description:** Unnecessary nested blocks create unnecessary scope and confuse readers.
@@ -5443,7 +5822,7 @@ public void Process()
 
 ---
 
-## S1226: Method parameters should not be reassigned
+#### S1226: Method parameters should not be reassigned
 
 **Severity:** Major  
 **Description:** Reassigning a parameter inside a method makes the code harder to follow.
@@ -5470,7 +5849,7 @@ public int Compute(int value)
 
 ---
 
-## S125: Sections of code should not be commented out
+#### S125: Sections of code should not be commented out
 
 **Severity:** Major  
 **Description:** Commented-out code clutters the file and is not maintained. Remove it or use version control.
@@ -5492,7 +5871,7 @@ public int Compute(int value)
 
 ---
 
-## S131: `switch` statements should have a `default` clause
+#### S131: `switch` statements should have a `default` clause
 
 **Severity:** Major  
 **Description:** A `switch` without `default` may silently miss cases when new enum values are added.
@@ -5530,7 +5909,7 @@ public string GetLabel(Status status)
 
 ---
 
-## S1481: Unused local variables should be removed
+#### S1481: Unused local variables should be removed
 
 **Severity:** Minor  
 **Description:** Declared variables that are never used create noise and may indicate incomplete logic.
@@ -5556,7 +5935,7 @@ public void Process()
 
 ---
 
-## S1643: Strings should not be concatenated using `+` in a loop
+#### S1643: Strings should not be concatenated using `+` in a loop
 
 **Severity:** Minor  
 **Description:** Repeated string concatenation in a loop creates many intermediate string objects. Use `StringBuilder`.
@@ -5593,7 +5972,7 @@ public string BuildString(List<string> parts)
 
 ---
 
-## S1854: Unused assignments should be removed
+#### S1854: Unused assignments should be removed
 
 **Severity:** Major  
 **Description:** Assigning a value to a variable and then overwriting it before reading is dead code.
@@ -5621,7 +6000,7 @@ public int Compute()
 
 ---
 
-## S1905: Redundant casts should not be used
+### S1905: Redundant casts should not be used
 
 **Severity:** Minor  
 **Description:** Casting a value to its own type or to a base type it already is does nothing.
@@ -5646,7 +6025,7 @@ public string GetValue(object value)
 
 ---
 
-## S1939: Inheritance list should not be redundant
+### S1939: Inheritance list should not be redundant
 
 **Severity:** Minor  
 **Description:** Explicitly listing an interface that is already inherited through a base class is redundant.
@@ -5670,7 +6049,7 @@ public class MyDisposable : IAsyncDisposable
 
 ---
 
-## S1940: Aborting `finally` blocks should not be used
+### S1940: Aborting `finally` blocks should not be used
 
 **Severity:** Blocker  
 **Description:** Throwing an exception or calling `Environment.Exit` in a `finally` block suppresses the original exception and loses diagnostic information.
@@ -5709,7 +6088,7 @@ public void Process()
 
 ---
 
-## S1994: `GC.SuppressFinalize` should not be called on `IDisposable` types that do not have a finalizer
+### S1994: `GC.SuppressFinalize` should not be called on `IDisposable` types that do not have a finalizer
 
 **Severity:** Major  
 **Description:** Calling `GC.SuppressFinalize(this)` in a `Dispose` method when the class has no finalizer is unnecessary.
@@ -5740,7 +6119,7 @@ public class Resource : IDisposable
 
 ---
 
-## S2114: `Equality` checks should not be made with `float.NaN`
+### S2114: `Equality` checks should not be made with `float.NaN`
 
 **Severity:** Major  
 **Description:** `float.NaN == float.NaN` is always `false`. Use `float.IsNaN` instead.
@@ -5765,7 +6144,7 @@ public bool IsNotANumber(float value)
 
 ---
 
-## S2208: `System.Console` should not be used in production code
+### S2208: `System.Console` should not be used in production code
 
 **Severity:** Minor  
 **Description:** Writing to the console from production code pollutes logs and is not suitable for structured logging.
@@ -5790,7 +6169,7 @@ public void Process(ILogger<Processor> logger)
 
 ---
 
-## S2223: Non-constant static fields should not be visible
+### S2223: Non-constant static fields should not be visible
 
 **Severity:** Major  
 **Description:** Mutable static fields are shared across all threads and can cause race conditions.
@@ -5815,7 +6194,7 @@ public static class Config
 
 ---
 
-## S2225: `ToString()` should not return `null`
+### S2225: `ToString()` should not return `null`
 
 **Severity:** Major  
 **Description:** Returning `null` from `ToString()` violates the contract and causes `NullReferenceException` in callers.
@@ -5840,7 +6219,7 @@ public override string ToString()
 
 ---
 
-## S2234: Parameters should be passed in the correct order
+### S2234: Parameters should be passed in the correct order
 
 **Severity:** Major  
 **Description:** Passing arguments in the wrong order can cause subtle bugs, especially when parameter types match.
@@ -5866,7 +6245,7 @@ public void Move(int x, int y)
 
 ---
 
-## S2325: Methods and properties that do not access instance data should be static
+### S2325: Methods and properties that do not access instance data should be static
 
 **Severity:** Minor  
 **Description:** Methods that do not use instance members should be `static` to indicate they are stateless.
@@ -5897,7 +6276,7 @@ public class Calculator
 
 ---
 
-## S2326: Unused type parameters should be removed
+### S2326: Unused type parameters should be removed
 
 **Severity:** Major  
 **Description:** Generic type parameters that are not used in the method signature serve no purpose.
@@ -5922,7 +6301,7 @@ public string Process(string input)
 
 ---
 
-## S2357: Fields should not have public accessibility
+### S2357: Fields should not have public accessibility
 
 **Severity:** Minor  
 **Description:** Public fields break encapsulation and cannot have validation or change notification added later.
@@ -5947,7 +6326,7 @@ public class User
 
 ---
 
-## S2436: Classes and methods should not have too many generic parameters
+### S2436: Classes and methods should not have too many generic parameters
 
 **Severity:** Major  
 **Description:** More than three generic parameters make the API hard to use and indicate a design issue.
@@ -5970,7 +6349,7 @@ public class Container<TKey, TValue>
 
 ---
 
-## S2486: Generic exceptions should not be thrown
+### S2486: Generic exceptions should not be thrown
 
 **Severity:** Major  
 **Description:** Throwing `Exception`, `SystemException`, or `ApplicationException` forces callers to catch all exceptions, hiding specific failure modes.
@@ -5993,40 +6372,7 @@ public void Process()
 }
 ```
 
----
-
-## S2589: Boolean expressions should not be gratuitous
-
-**Severity:** Major  
-**Description:** Conditions that are always `true` or always `false` are dead code and usually indicate a logic error.
-
-**Noncompliant:**
-
-```csharp
-public void Process(string value)
-{
-    if (value is not null && value is not null)
-    {
-        // Redundant null check
-    }
-}
-```
-
-**Compliant:**
-
-```csharp
-public void Process(string value)
-{
-    if (value is not null)
-    {
-        // Single null check is sufficient
-    }
-}
-```
-
----
-
-## S2699: Tests should include assertions
+### S2699: Tests should include assertions
 
 **Severity:** Blocker  
 **Description:** Tests without assertions pass even when the code under test is broken.
@@ -6056,7 +6402,7 @@ public void CreateUser_ReturnsUser()
 
 ---
 
-## S2971: `IEnumerable` LINQ methods should be simplified
+### S2971: `IEnumerable` LINQ methods should be simplified
 
 **Severity:** Minor  
 **Description:** Calling `Count()` then `Any()` on the same sequence is redundant. Use the result directly.
@@ -6081,7 +6427,7 @@ public bool HasItems(List<int> items)
 
 ---
 
-## S3052: Members should not be initialized to default values
+### S3052: Members should not be initialized to default values
 
 **Severity:** Minor  
 **Description:** Explicitly initializing a field or property to its default value is redundant.
@@ -6108,7 +6454,7 @@ public class User
 
 ---
 
-## S3060: `is` should be used instead of `==` for type comparison
+### S3060: `is` should be used instead of `==` for type comparison
 
 **Severity:** Major  
 **Description:** Using `== typeof(...)` is less readable than the `is` operator and does not handle inheritance correctly.
@@ -6133,7 +6479,7 @@ public bool IsString(object value)
 
 ---
 
-## S3063: Strings should not be concatenated with `+` when the result is immediately discarded
+### S3063: Strings should not be concatenated with `+` when the result is immediately discarded
 
 **Severity:** Major  
 **Description:** Concatenating strings and not using the result is dead code and indicates a mistake.
@@ -6160,7 +6506,7 @@ public string Build()
 
 ---
 
-## S3235: Redundant `Parentheses` should not be used
+### S3235: Redundant `Parentheses` should not be used
 
 **Severity:** Minor  
 **Description:** Extra parentheses around a simple expression add noise without improving readability.
@@ -6185,7 +6531,7 @@ public int Compute(int a)
 
 ---
 
-## S3240: The simplest possible condition syntax should be used
+### S3240: The simplest possible condition syntax should be used
 
 **Severity:** Minor  
 **Description:** Prefer ternary expressions or `??` over `if/else` when both branches are simple assignments or returns.
@@ -6217,7 +6563,7 @@ public string GetLabel(bool active)
 
 ---
 
-## S3241: Methods should not return values that are never used
+### S3241: Methods should not return values that are never used
 
 **Severity:** Major  
 **Description:** Returning a value that callers ignore is misleading and suggests the return type should be `void`.
@@ -6243,7 +6589,7 @@ public void Process()
 
 ---
 
-## S3253: Constructor initializers should not be redundant
+### S3253: Constructor initializers should not be redundant
 
 **Severity:** Minor  
 **Description:** Calling `: base()` explicitly is redundant because it is done implicitly.
@@ -6272,7 +6618,7 @@ public class User : Entity
 
 ---
 
-## S3254: Default parameter values should not be passed as arguments
+### S3254: Default parameter values should not be passed as arguments
 
 **Severity:** Minor  
 **Description:** Passing the same value that is already the parameter default is redundant.
@@ -6297,7 +6643,7 @@ public void Process(int value = 10)
 
 ---
 
-## S3261: Namespaces should not be empty
+### S3261: Namespaces should not be empty
 
 **Severity:** Minor  
 **Description:** Empty namespaces serve no purpose and should be removed.
@@ -6321,7 +6667,7 @@ namespace MyApplication.Features
 
 ---
 
-## S3262: `params` should be used on overrides
+### S3262: `params` should be used on overrides
 
 **Severity:** Minor  
 **Description:** When overriding a method with `params`, the override should also use `params` to preserve caller flexibility.
@@ -6356,7 +6702,7 @@ public class Derived : Base
 
 ---
 
-## S3263: Static fields should appear in the order they must be initialized
+### S3263: Static fields should appear in the order they must be initialized
 
 **Severity:** Major  
 **Description:** If a static field initializer depends on another static field, the dependent field must be declared after the one it depends on.
@@ -6383,7 +6729,7 @@ public class Config
 
 ---
 
-## S3264: Event handlers should have the correct signature
+### S3264: Event handlers should have the correct signature
 
 **Severity:** Major  
 **Description:** Event handlers should follow the `(object sender, EventArgs e)` pattern for compatibility.
@@ -6406,7 +6752,7 @@ public void OnClick(object sender, EventArgs e)
 
 ---
 
-## S3265: Non-flags enums should not be marked with `FlagsAttribute`
+### S3265: Non-flags enums should not be marked with `FlagsAttribute`
 
 **Severity:** Major  
 **Description:** Applying `[Flags]` to an enum whose values are not powers of two causes incorrect bitwise behaviour.
@@ -6436,7 +6782,7 @@ public enum Status
 
 ---
 
-## S3353: Uninitialized fields should not be used
+### S3353: Uninitialized fields should not be used
 
 **Severity:** Major  
 **Description:** Reading a field that has not been initialized yields the default value and usually indicates a missing constructor assignment.
@@ -6476,7 +6822,7 @@ public class Counter
 
 ---
 
-## S3366: `this` should not be passed out of a constructor
+### S3366: `this` should not be passed out of a constructor
 
 **Severity:** Major  
 **Description:** Passing `this` from a constructor allows other code to observe the object before it is fully constructed.
@@ -6507,7 +6853,7 @@ public class User
 
 ---
 
-## S3431: `Assert.AreEqual` should not be used with `float` or `double`
+### S3431: `Assert.AreEqual` should not be used with `float` or `double`
 
 **Severity:** Major  
 **Description:** Exact equality on floating-point numbers is unreliable due to precision issues.
@@ -6526,7 +6872,7 @@ Assert.AreEqual(0.3, 0.1 + 0.2, 0.0001);
 
 ---
 
-## S3600: `Assembly.GetExecutingAssembly` should not be called in `async` methods
+### S3600: `Assembly.GetExecutingAssembly` should not be called in `async` methods
 
 **Severity:** Major  
 **Description:** In `async` methods, the executing assembly is the framework rather than the expected caller.
@@ -6551,7 +6897,7 @@ public void DoWork()
 
 ---
 
-## S3626: Jump statements should not be redundant
+### S3626: Jump statements should not be redundant
 
 **Severity:** Minor  
 **Description:** `return`, `break`, or `continue` at the end of a block where control would flow there anyway is redundant.
@@ -6580,7 +6926,7 @@ public void Process()
 
 ---
 
-## S3693: Constructor arguments should not be passed to `base` with the same name and type
+### S3693: Constructor arguments should not be passed to `base` with the same name and type
 
 **Severity:** Minor  
 **Description:** Passing a constructor parameter to `base` with the same name is unnecessary when the base constructor is called implicitly.
@@ -6609,7 +6955,7 @@ public class Derived : Base
 
 ---
 
-## S3776: Cognitive Complexity of methods should not be too high
+### S3776: Cognitive Complexity of methods should not be too high
 
 **Severity:** Critical  
 **Description:** Methods with high cognitive complexity (default threshold 15) are hard to understand and maintain. Refactor into smaller methods.
@@ -6667,7 +7013,7 @@ private void ProcessItem(Item item)
 
 ---
 
-## S3869: `SafeHandle` should be used instead of `IntPtr`
+### S3869: `SafeHandle` should be used instead of `IntPtr`
 
 **Severity:** Major  
 **Description:** Using `IntPtr` for handles does not provide automatic resource management. Use `SafeHandle` derivatives.
@@ -6688,7 +7034,7 @@ private static extern SafeFileHandle CreateFile(...);
 
 ---
 
-## S3925: `ISerializable` should be implemented correctly
+### S3925: `ISerializable` should be implemented correctly
 
 **Severity:** Critical  
 **Description:** Implementing `ISerializable` requires a protected constructor and proper `GetObjectData` handling to avoid security issues.
@@ -6718,7 +7064,7 @@ public class CustomException : Exception
 
 ---
 
-## S3994: `Uri.IsWellFormedUriString` should not be used
+### S3994: `Uri.IsWellFormedUriString` should not be used
 
 **Severity:** Major  
 **Description:** `Uri.IsWellFormedUriString` returns `false` for valid URIs that contain internationalized domain names.
@@ -6743,7 +7089,7 @@ public bool IsValid(string url)
 
 ---
 
-## S3996: `Task` should not be returned from `async` methods without awaiting
+### S3996: `Task` should not be returned from `async` methods without awaiting
 
 **Severity:** Major  
 **Description:** Returning a `Task` from an `async` method without awaiting it causes the exception to be unobserved.
@@ -6768,7 +7114,7 @@ public async Task DoWorkAsync()
 
 ---
 
-## S4000: Delegates should not be used as event handlers if they are not compatible
+### S4000: Delegates should not be used as event handlers if they are not compatible
 
 **Severity:** Major  
 **Description:** Delegates with mismatched signatures used as event handlers cause runtime exceptions.
@@ -6797,7 +7143,7 @@ public void Trigger()
 
 ---
 
-## S4016: Generic type parameters should be named `T` or prefixed with `T`
+### S4016: Generic type parameters should be named `T` or prefixed with `T`
 
 **Severity:** Minor  
 **Description:** Following the `T` prefix convention makes generic code easier to read.
@@ -6820,7 +7166,7 @@ public class Container<TElement>
 
 ---
 
-## S4027: Exceptions should not be thrown in finally blocks
+### S4027: Exceptions should not be thrown in finally blocks
 
 **Severity:** Blocker  
 **Description:** Throwing an exception in a `finally` block suppresses the original exception.
@@ -6859,7 +7205,7 @@ public void Process()
 
 ---
 
-## S4039: `Delegate.Subtract` and `Delegate.Remove` should not be used in events
+### S4039: `Delegate.Subtract` and `Delegate.Remove` should not be used in events
 
 **Severity:** Major  
 **Description:** Removing a multicast delegate removes all occurrences, not just the last added, which is usually not intended.
@@ -6878,7 +7224,7 @@ eventHandler -= handler;
 
 ---
 
-## S4049: Method names should not be suffixed with `Async` if they are not async
+### S4049: Method names should not be suffixed with `Async` if they are not async
 
 **Severity:** Minor  
 **Description:** The `Async` suffix implies the method returns a `Task` and is awaitable.
@@ -6903,7 +7249,7 @@ public async Task LoadAsync()
 
 ---
 
-## S4056: Overloads with a `params` array should not be defined
+### S4056: Overloads with a `params` array should not be defined
 
 **Severity:** Minor  
 **Description:** Overloads that take an array and a `params` version can cause ambiguity and unexpected boxing.
@@ -6924,7 +7270,7 @@ public void Log(IEnumerable<string> messages) { }
 
 ---
 
-## S4058: Overloads should not differ only by `ref` or `out`
+### S4058: Overloads should not differ only by `ref` or `out`
 
 **Severity:** Major  
 **Description:** Methods that differ only by `ref`/`out` parameters are confusing for callers and compilers.
@@ -6945,7 +7291,7 @@ public bool TryProcess(out int value) { value = 0; return true; }
 
 ---
 
-## S4060: `volatile` fields should not be used
+### S4060: `volatile` fields should not be used
 
 **Severity:** Major  
 **Description:** `volatile` does not provide atomicity for compound operations. Use `Interlocked` or `lock` instead.
@@ -6974,7 +7320,7 @@ public void Increment()
 
 ---
 
-## S4069: `Increment` and `Decrement` operators should not be used in a method call
+### S4069: `Increment` and `Decrement` operators should not be used in a method call
 
 **Severity:** Minor  
 **Description:** Using `++` or `--` inside a method argument makes evaluation order unclear.
@@ -7000,7 +7346,7 @@ public void Process(int[] values, int index)
 
 ---
 
-## S4142: Duplicate values should not be passed as arguments
+### S4142: Duplicate values should not be passed as arguments
 
 **Severity:** Major  
 **Description:** Passing the same value to two different parameters is usually a copy-paste mistake.
@@ -7025,7 +7371,7 @@ public void Move(int x, int y)
 
 ---
 
-## S4158: Empty collections should not be passed as arguments
+### S4158: Empty collections should not be passed as arguments
 
 **Severity:** Major  
 **Description:** Passing an empty collection literal or newly created empty collection is pointless.
@@ -7053,7 +7399,7 @@ public void Process(List<string> items)
 
 ---
 
-## S4260: `nameof` should be used instead of string literals for parameter names
+### S4260: `nameof` should be used instead of string literals for parameter names
 
 **Severity:** Major  
 **Description:** String literals for parameter names are not refactor-safe and can become stale.
@@ -7078,7 +7424,7 @@ public void Process(string value)
 
 ---
 
-## S4277: `Shared` or `static` fields should be read-only when public
+### S4277: `Shared` or `static` fields should be read-only when public
 
 **Severity:** Major  
 **Description:** Public mutable static fields can be changed by any code, leading to unexpected state changes.
@@ -7097,7 +7443,7 @@ public static readonly int MaxRetries = 3;
 
 ---
 
-## S4487: Unread `private` fields should be removed
+### S4487: Unread `private` fields should be removed
 
 **Severity:** Major  
 **Description:** Private fields that are never read indicate dead code or incomplete implementation.
@@ -7142,7 +7488,7 @@ public class Processor
 
 ---
 
-## S4507: Delivering code in debug mode should not be done
+### S4507: Delivering code in debug mode should not be done
 
 **Severity:** Major  
 **Description:** Debug builds expose detailed error information and may disable security features.
@@ -7163,7 +7509,7 @@ public class Processor
 
 ---
 
-## S4792: Configuring loggers is security-sensitive
+### S4792: Configuring loggers is security-sensitive
 
 **Severity:** Major  
 **Description:** Misconfigured logging can expose sensitive data. Never log secrets, passwords, or PII.
@@ -7182,7 +7528,7 @@ _logger.LogInformation("User {UserId} logged in", userId);
 
 ---
 
-## S5679: Regular expressions should not contain empty groups
+### S5679: Regular expressions should not contain empty groups
 
 **Severity:** Minor  
 **Description:** Empty groups in regex serve no purpose and indicate a mistake.
@@ -7201,7 +7547,7 @@ var pattern = @"helloworld";
 
 ---
 
-## S6359: `ThreadStatic` fields should not be used with `async` methods
+### S6359: `ThreadStatic` fields should not be used with `async` methods
 
 **Severity:** Major  
 **Description:** `async` methods may resume on different threads, making `ThreadStatic` values unreliable.
@@ -7235,11 +7581,11 @@ public async Task ProcessAsync()
 
 ---
 
-# Security Hotspots
+## Security Hotspots
 
 Rules that identify security-sensitive code that requires manual review.
 
-## S2068: Credentials should not be hard-coded
+### S2068: Credentials should not be hard-coded
 
 **Severity:** Blocker  
 **Description:** Hardcoded passwords, API keys, or connection strings are visible in source control and binaries.
@@ -7261,7 +7607,7 @@ public class ApiOptions
 
 ---
 
-## S2077: SQL injection risks should be mitigated
+### S2077: SQL injection risks should be mitigated
 
 **Severity:** Blocker  
 **Description:** Concatenating user input into SQL queries creates injection vulnerabilities. Use parameterized queries.
@@ -7289,7 +7635,7 @@ public async Task<List<User>> Search(string name)
 
 ---
 
-## S2091: XPath injection risks should be mitigated
+### S2091: XPath injection risks should be mitigated
 
 **Severity:** Blocker  
 **Description:** User input in XPath expressions can alter query logic. Validate and parameterize inputs.
@@ -7319,7 +7665,7 @@ public string FindUser(string username)
 
 ---
 
-## S2245: Random values should not be used for security purposes
+### S2245: Random values should not be used for security purposes
 
 **Severity:** Blocker  
 **Description:** `System.Random` is deterministic and predictable. Use `RandomNumberGenerator` for security-sensitive operations.
@@ -7347,7 +7693,7 @@ public string GeneratePassword()
 
 ---
 
-## S2257: Using weak hash algorithms is security-sensitive
+### S2257: Using weak hash algorithms is security-sensitive
 
 **Severity:** Critical  
 **Description:** MD5 and SHA-1 are vulnerable to collision attacks. Use SHA-256 or stronger for hashing.
@@ -7374,7 +7720,7 @@ public byte[] HashPassword(string password)
 
 ---
 
-## S2612: Prohibited classes should not be used
+### S2612: Prohibited classes should not be used
 
 **Severity:** Major  
 **Description:** Certain classes like `BinaryFormatter` are dangerous due to deserialization vulnerabilities and should not be used.
@@ -7395,7 +7741,7 @@ var json = JsonSerializer.Serialize(obj);
 
 ---
 
-## S3011: Bypassing accessibility is security-sensitive
+### S3011: Bypassing accessibility is security-sensitive
 
 **Severity:** Major  
 **Description:** Using reflection to access non-public members breaks encapsulation and can expose internal state.
@@ -7414,139 +7760,7 @@ var password = field?.GetValue(user);
 var password = user.GetPasswordHash();
 ```
 
----
-
-## S3330: Server-side requests should not be vulnerable to SSRF attacks
-
-**Severity:** Blocker  
-**Description:** SSRF occurs when user-controlled URLs are used to make server-side requests without validation.
-
-**Noncompliant:**
-
-```csharp
-public async Task<string> Fetch(string url)
-{
-    using var client = new HttpClient();
-    return await client.GetStringAsync(url);
-}
-```
-
-**Compliant:**
-
-```csharp
-public async Task<string> Fetch(string url)
-{
-    var allowedHosts = new[] { "api.example.com", "cdn.example.com" };
-    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
-        || !allowedHosts.Contains(uri.Host))
-    {
-        throw new ArgumentException("URL not allowed");
-    }
-
-    using var client = new HttpClient();
-    return await client.GetStringAsync(uri);
-}
-```
-
----
-
-## S4502: Disabling CSRF protections is security-sensitive
-
-**Severity:** Blocker  
-**Description:** Disabling CSRF validation in ASP.NET Core exposes the application to cross-site request forgery attacks.
-
-**Noncompliant:**
-
-```csharp
-services.AddControllersWithViews(options =>
-{
-    options.Filters.Add(new IgnoreAntiforgeryTokenAttribute());
-});
-```
-
-**Compliant:**
-
-```csharp
-services.AddControllersWithViews();
-```
-
----
-
-## S4790: Hashing data is security-sensitive
-
-**Severity:** Critical  
-**Description:** The choice of hash algorithm affects security. Use SHA-256 or stronger and avoid MD5/SHA-1.
-
-**Noncompliant:**
-
-```csharp
-public byte[] Hash(string input)
-{
-    using var md5 = MD5.Create();
-    return md5.ComputeHash(Encoding.UTF8.GetBytes(input));
-}
-```
-
-**Compliant:**
-
-```csharp
-public byte[] Hash(string input)
-{
-    using var sha256 = SHA256.Create();
-    return sha256.ComputeHash(Encoding.UTF8.GetBytes(input));
-}
-```
-
----
-
-## S4792: Configuring loggers is security-sensitive
-
-**Severity:** Major  
-**Description:** Logger configuration that includes sensitive fields or writes to insecure destinations can leak data.
-
-**Noncompliant:**
-
-```csharp
-_logger.LogInformation("Login: {Email} {Password}", email, password);
-```
-
-**Compliant:**
-
-```csharp
-_logger.LogInformation("User {UserId} logged in", userId);
-```
-
----
-
-## S5324: `Random` should not be used for security-sensitive purposes
-
-**Severity:** Blocker  
-**Description:** `Random` is not cryptographically secure and should not be used for tokens, keys, or passwords.
-
-**Noncompliant:**
-
-```csharp
-public string GenerateToken()
-{
-    var random = new Random();
-    return random.Next().ToString();
-}
-```
-
-**Compliant:**
-
-```csharp
-public string GenerateToken()
-{
-    var bytes = new byte[32];
-    RandomNumberGenerator.Fill(bytes);
-    return Convert.ToHexString(bytes);
-}
-```
-
----
-
-## S5332: Using clear-text protocols is security-sensitive
+### S5332: Using clear-text protocols is security-sensitive
 
 **Severity:** Blocker  
 **Description:** Sending data over HTTP or FTP exposes it to interception. Use HTTPS and SFTP.
@@ -7567,7 +7781,7 @@ return await client.GetStringAsync("https://api.example.com/data");
 
 ---
 
-## S5443: Using public writable directories is security-sensitive
+### S5443: Using public writable directories is security-sensitive
 
 **Severity:** Major  
 **Description:** Writing files to world-writable directories can allow other users to modify or replace them.
@@ -7588,7 +7802,7 @@ File.WriteAllText(path, json);
 
 ---
 
-## S5445: Using temporary files is security-sensitive
+### S5445: Using temporary files is security-sensitive
 
 **Severity:** Major  
 **Description:** Temporary files may have weak permissions or be predictable. Use secure APIs and explicit cleanup.
@@ -7614,28 +7828,7 @@ finally
 }
 ```
 
----
-
-## S5659: SSL/TLS connection settings should not be bypassed
-
-**Severity:** Blocker  
-**Description:** Disabling certificate validation allows man-in-the-middle attacks. Never bypass validation in production.
-
-**Noncompliant:**
-
-```csharp
-ServicePointManager.ServerCertificateValidationCallback = (sender, cert, chain, errors) => true;
-```
-
-**Compliant:**
-
-```csharp
-// Use default validation
-```
-
----
-
-## S5689: Deserializing objects from an untrusted source is security-sensitive
+### S5689: Deserializing objects from an untrusted source is security-sensitive
 
 **Severity:** Blocker  
 **Description:** Deserializing untrusted data can lead to remote code execution. Use safe serializers and whitelist types.
@@ -7655,7 +7848,7 @@ var obj = JsonSerializer.Deserialize<MyDto>(json);
 
 ---
 
-## S5693: Allowing both HTTP and HTTPS is security-sensitive
+### S5693: Allowing both HTTP and HTTPS is security-sensitive
 
 **Severity:** Major  
 **Description:** Allowing HTTP alongside HTTPS exposes traffic to interception. Redirect HTTP to HTTPS.
@@ -7681,7 +7874,7 @@ app.UseEndpoints(endpoints =>
 
 ---
 
-## S5766: Deserializing with `TypeNameHandling.All` is security-sensitive
+### S5766: Deserializing with `TypeNameHandling.All` is security-sensitive
 
 **Severity:** Blocker  
 **Description:** `TypeNameHandling.All` in Newtonsoft.Json allows arbitrary type instantiation during deserialization.
@@ -7704,7 +7897,7 @@ var obj = JsonConvert.DeserializeObject<MyType>(json);
 
 ---
 
-## S6244: Using weak SSL/TLS protocols is security-sensitive
+### S6244: Using weak SSL/TLS protocols is security-sensitive
 
 **Severity:** Blocker  
 **Description:** Enabling TLS 1.0 or 1.1 exposes the application to known attacks. Use TLS 1.2 or 1.3.
@@ -7729,7 +7922,7 @@ var handler = new HttpClientHandler
 
 ---
 
-# AI Agent Instructions
+## AI Agent Instructions
 
 When generating code:
 
