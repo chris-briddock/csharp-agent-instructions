@@ -32,6 +32,9 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [TimeProvider Abstraction](#timeprovider-abstraction)
 - [Documentation Standards](#documentation-standards)
 - [Constants](#constants)
+- [Complexity Metrics](#complexity-metrics)
+  - [Cyclomatic Complexity](#cyclomatic-complexity)
+  - [Cognitive Complexity](#cognitive-complexity)
 
 ## Part II: Architecture & ASP.NET Core
 
@@ -1027,6 +1030,155 @@ Guidelines:
 - Be aware that boxing can occur when casting structs to interfaces.
 - Avoid passing value types to methods that accept `object` or `IEnumerable` in performance-critical code.
 - Use `Span<T>`, `ReadOnlySpan<T>`, and `Memory<T>` for high-performance buffer manipulation without boxing.
+
+---
+
+## Complexity Metrics
+
+### Cyclomatic Complexity
+
+Cyclomatic complexity measures the number of independent paths through a method. A higher value indicates more decision points and a greater risk of defects. Keep methods simple by extracting nested conditionals and loops into smaller, focused methods.
+
+**Noncompliant:**
+
+```csharp
+public decimal CalculateDiscount(Order order)
+{
+    if (order is null)
+    {
+        return 0;
+    }
+
+    if (!order.IsVerified)
+    {
+        return 0;
+    }
+
+    if (order.Total < 100)
+    {
+        return 0;
+    }
+
+    if (order.CustomerType == CustomerType.VIP)
+    {
+        if (order.Total > 1000)
+        {
+            return order.Total * 0.20m;
+        }
+        return order.Total * 0.10m;
+    }
+    else if (order.CustomerType == CustomerType.Loyal)
+    {
+        return order.Total * 0.05m;
+    }
+    else
+    {
+        return 0;
+    }
+}
+```
+
+**Compliant:**
+
+```csharp
+public decimal CalculateDiscount(Order order)
+{
+    if (!IsEligibleForDiscount(order))
+    {
+        return 0;
+    }
+
+    return order.CustomerType switch
+    {
+        CustomerType.VIP => CalculateVipDiscount(order.Total),
+        CustomerType.Loyal => order.Total * 0.05m,
+        _ => 0
+    };
+}
+
+private static bool IsEligibleForDiscount(Order? order)
+{
+    return order is not null
+        && order.IsVerified
+        && order.Total >= 100;
+}
+
+private static decimal CalculateVipDiscount(decimal total)
+{
+    return total > 1000
+        ? total * 0.20m
+        : total * 0.10m;
+}
+```
+
+Guidelines:
+
+- Keep cyclomatic complexity low (default threshold 10) by reducing nested `if` statements and loops.
+- Extract validation logic into private helper methods.
+- Prefer `switch` expressions over deep `if/else` chains.
+- Return early to reduce nesting depth.
+
+### Cognitive Complexity
+
+Cognitive complexity measures how difficult code is to understand, penalizing nested structures more than sequential ones. Methods with high cognitive complexity (default threshold 15) are harder to maintain and test. Refactor by flattening nesting and extracting logical steps into named methods.
+
+**Noncompliant:**
+
+```csharp
+public void Process(Order order)
+{
+    if (order is not null)
+    {
+        if (order.Items is not null)
+        {
+            foreach (var item in order.Items)
+            {
+                if (item.Quantity > 0)
+                {
+                    if (item.Price > 0)
+                    {
+                        // ... deeply nested logic
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+**Compliant:**
+
+```csharp
+public void Process(Order order)
+{
+    if (order is null || order.Items is null)
+    {
+        return;
+    }
+
+    foreach (var item in order.Items)
+    {
+        ProcessItem(item);
+    }
+}
+
+private void ProcessItem(Item item)
+{
+    if (item.Quantity <= 0 || item.Price <= 0)
+    {
+        return;
+    }
+
+    // ...
+}
+```
+
+Guidelines:
+
+- Use guard clauses and early returns to flatten nesting.
+- Extract nested loops and conditionals into well-named helper methods.
+- Avoid mixing multiple levels of abstraction in a single method.
+- Keep cognitive complexity low (default threshold 15).
 
 ---
 
