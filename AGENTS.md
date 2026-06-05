@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines coding standards, architectural guidance, and expectations for all contributors and AI coding agents working on C# and ASP.NET Core projects.
+This document defines coding guidance, architectural guidance, and expectations for all AI coding agents working on C# and ASP.NET Core projects.
 
 When multiple valid approaches exist, choose the simplest solution that preserves readability and maintainability.
 
@@ -22,6 +22,7 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [Exceptions](#exceptions)
   - [LINQ](#linq)
   - [PLINQ](#plinq)
+  - [Boxing and Unboxing](#boxing-and-unboxing)
 - [Value Objects](#value-objects)
 - [Nullable Reference Types](#nullable-reference-types)
 - [Generic Variance](#generic-variance)
@@ -68,7 +69,7 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [HttpClient & IHttpClientFactory](#httpclient--ihttpclientfactory)
   - [Distributed Tracing](#distributed-tracing)
   - [Metrics & OpenTelemetry](#metrics--opentelemetry)
-  - [Persistence Guidlines](#persistence-guidlines)
+  - [Persistence Guidelines](#persistence-guidelines)
   - [Testing Standards](#testing-standards)
     - [Unit Testing](#unit-testing)
     - [Integration Testing](#integration-testing)
@@ -945,6 +946,87 @@ orders.AsParallel().ForEach(o => total += o.Total); // Race condition
 ```csharp
 var total = orders.AsParallel().Sum(o => o.Total);
 ```
+
+---
+
+## Boxing and Unboxing
+
+Boxing is the process of converting a value type to a reference type (`object` or an interface). Unboxing is the reverse. These operations allocate on the heap and copy data, which impacts performance and increases GC pressure. Avoid implicit and explicit boxing in hot paths.
+
+**Noncompliant:**
+
+```csharp
+public void Process(int value)
+{
+    object boxed = value; // Implicit boxing
+    int unboxed = (int)boxed; // Unboxing
+}
+```
+
+**Compliant:**
+
+```csharp
+public void Process(int value)
+{
+    // Operate on value type directly; no boxing
+    int doubled = value * 2;
+}
+```
+
+### Avoid Boxing in Collections
+
+Using value types with `ArrayList` or non-generic `IList` forces boxing.
+
+**Noncompliant:**
+
+```csharp
+var list = new ArrayList();
+list.Add(42); // Boxing
+```
+
+**Compliant:**
+
+```csharp
+var list = new List<int>();
+list.Add(42); // No boxing
+```
+
+### Avoid Boxing with Interpolated Strings and `ToString()`
+
+Value types implement `IFormattable` and `IConvertible`, which can cause boxing when passed to `object` parameters in logging or string formatting.
+
+**Noncompliant:**
+
+```csharp
+_logger.LogInformation("Value: {Value}", 42); // Boxing to object
+```
+
+**Compliant:**
+
+```csharp
+_logger.LogInformation("Value: {Value}", 42.ToString()); // No boxing
+```
+
+### Generic Constraints to Prevent Boxing
+
+Use generic methods with `where T : struct` or interfaces to avoid boxing value types.
+
+**Compliant:**
+
+```csharp
+public T Max<T>(T a, T b) where T : IComparable<T>
+{
+    return a.CompareTo(b) > 0 ? a : b; // No boxing for value types
+}
+```
+
+Guidelines:
+
+- Prefer generic collections (`List<T>`, `Dictionary<TKey, TValue>`) over non-generic ones.
+- Use strongly typed overloads when available (e.g., `Console.WriteLine(int)` instead of `Console.WriteLine(object)`).
+- Be aware that boxing can occur when casting structs to interfaces.
+- Avoid passing value types to methods that accept `object` or `IEnumerable` in performance-critical code.
+- Use `Span<T>`, `ReadOnlySpan<T>`, and `Memory<T>` for high-performance buffer manipulation without boxing.
 
 ---
 
@@ -2058,7 +2140,7 @@ Avoid exposing mutable state unnecessarily. Prefer immutable or read-only proper
 
 ---
 
-## Domain Events
+### Domain Events
 
 Use domain events for side effects and cross-cutting concerns within a service.
 
@@ -3843,7 +3925,7 @@ Guidelines:
 
 ---
 
-## Persistence Guidlines
+## Persistence Guidelines
 
 ## Entity Framework Core
 
