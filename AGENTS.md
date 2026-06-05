@@ -63,6 +63,7 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [CQRS](#cqrs)
 - [System.Text.Json](#systemtextjson)
 - [gRPC](#grpc)
+- [Server-Sent Events](#server-sent-events)
 - [Authentication & Authorization](#authentication--authorization)
 - [HttpClient & IHttpClientFactory](#httpclient--ihttpclientfactory)
 - [Distributed Tracing](#distributed-tracing)
@@ -3131,6 +3132,92 @@ Guidelines:
 - Use `AddGrpcClient` for typed gRPC clients with `IHttpClientFactory` integration.
 - Add message handlers for service identity when calling between services.
 - Configure deadline/timeout on individual calls, not globally.
+
+---
+
+# Server-Sent Events
+
+Server-Sent Events (SSE) provide a lightweight, text-based streaming mechanism from server to client over standard HTTP. They are ideal for pushing real-time updates to a web client.
+
+## SSE with IAsyncEnumerable
+
+In .NET 8+, ASP.NET Core can stream `IAsyncEnumerable<T>` responses directly as `text/event-stream`.
+
+### Endpoint
+
+```csharp
+public sealed record OrderStatusUpdate(
+    Guid OrderId,
+    string Status,
+    DateTimeOffset Timestamp);
+
+public sealed class OrderStatusStreamEndpoint : EndpointBase
+{
+    private readonly IOrderStatusService _statusService;
+
+    public OrderStatusStreamEndpoint(IOrderStatusService statusService)
+    {
+        _statusService = statusService;
+    }
+
+    [HttpGet("orders/stream")]
+    public async IAsyncEnumerable<OrderStatusUpdate> StreamOrderUpdates(
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var update in _statusService.StreamUpdatesAsync(ct))
+        {
+            yield return update;
+        }
+    }
+}
+```
+
+Registration:
+
+```csharp
+builder.Services.AddServerSentEvents();
+
+var app = builder.Build();
+app.MapControllers();
+```
+
+The `[EnumeratorCancellation]` attribute ensures the `CancellationToken` is passed to the underlying enumerator, allowing the stream to stop when the client disconnects.
+
+### Service Layer
+
+```csharp
+public sealed class OrderStatusService
+{
+    private readonly Channel<OrderStatusUpdate> _channel;
+
+    public OrderStatusService()
+    {
+        _channel = Channel.CreateUnbounded<OrderStatusUpdate>();
+    }
+
+    public async IAsyncEnumerable<OrderStatusUpdate> StreamUpdatesAsync(
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var update in _channel.Reader.ReadAllAsync(ct))
+        {
+            yield return update;
+        }
+    }
+
+    public async Task PublishAsync(OrderStatusUpdate update, CancellationToken ct = default)
+    {
+        await _channel.Writer.WriteAsync(update, ct);
+    }
+}
+```
+
+Guidelines:
+
+- Use SSE for unidirectional server-to-client streaming where WebSockets or SignalR are overkill.
+- Always apply `[EnumeratorCancellation]` to `IAsyncEnumerable` methods to propagate client disconnection.
+- Keep event payloads small and focused; send deltas rather than full objects.
+- Use `text/event-stream` content type with proper `id` and `retry` fields for reliable delivery.
+- For complex bidirectional streaming, prefer WebSockets or SignalR over SSE.
 
 ---
 
