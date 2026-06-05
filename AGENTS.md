@@ -30,6 +30,8 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [Service Lifetimes](#service-lifetimes)
 - [Nullable Reference Types](#nullable-reference-types)
 - [Generic Variance](#generic-variance)
+- [High-Performance Memory Patterns](#high-performance-memory-patterns)
+- [Modern C# Disposal Patterns](#modern-c-disposal-patterns)
 
 ## Part II: ASP.NET Core & System Architecture
 
@@ -52,6 +54,7 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [Background Jobs](#background-jobs)
   - [Middleware & Filters](#middleware--filters)
 - [Worker Services](#worker-services)
+- [System.Threading.Channels](#systemthreadingchannels)
 - [Caching](#caching)
   - [Output Caching & Response Caching](#output-caching--response-caching)
 - [Rate Limiting](#rate-limiting)
@@ -59,7 +62,10 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [Feature Flags](#feature-flags)
 - [CQRS](#cqrs)
 - [System.Text.Json](#systemtextjson)
+- [gRPC](#grpc)
 - [Authentication & Authorization](#authentication--authorization)
+- [HttpClient & IHttpClientFactory](#httpclient--ihttpclientfactory)
+- [Distributed Tracing](#distributed-tracing)
 - [Metrics & OpenTelemetry](#metrics--opentelemetry)
 - [Persistence Standards](#persistence-standards)
 - [Testing Standards](#testing-standards)
@@ -1387,6 +1393,117 @@ Guidelines:
 
 ---
 
+# High-Performance Memory Patterns
+
+Prefer modern memory-efficient patterns for hot paths and high-throughput code. Use `Span<T>`, `Memory<T>`, `stackalloc`, and `IAsyncEnumerable<T>` to reduce allocations and improve cache locality.
+
+## Span<T> and ReadOnlySpan<T>
+
+`Span<T>` provides a type-safe, memory-safe view into contiguous memory without allocation.
+
+**Compliant:**
+
+```csharp
+public int ParseIds(ReadOnlySpan<char> input, Span<int> output)
+{
+    int count = 0;
+    foreach (var range in input.Split(','))
+    {
+        if (int.TryParse(input[range], out int id))
+        {
+            output[count++] = id;
+        }
+    }
+    return count;
+}
+```
+
+Guidelines:
+- Use `Span<T>` for synchronous APIs operating on contiguous memory.
+- Use `ReadOnlySpan<T>` for read-only views.
+- Prefer `Span<T>` over `byte[]` or `char[]` for parsing and transformation.
+- `Span<T>` cannot be stored on the heap; use it for local stack-scoped operations.
+
+## Memory<T> and ReadOnlyMemory<T>
+
+`Memory<T>` is the heap-friendly equivalent of `Span<T>`, suitable for async operations and field storage.
+
+**Compliant:**
+
+```csharp
+public async Task ProcessStreamAsync(Stream stream, Memory<byte> buffer)
+{
+    int read;
+    while ((read = await stream.ReadAsync(buffer)) > 0)
+    {
+        ProcessChunk(buffer.Span.Slice(0, read));
+    }
+}
+```
+
+Guidelines:
+- Use `Memory<T>` when data must outlive the current stack frame (e.g., async methods).
+- Use `ReadOnlyMemory<T>` for read-only data shared across threads.
+- Convert `Memory<T>` to `Span<T>` via `.Span` for synchronous processing.
+
+## stackalloc
+
+Use `stackalloc` for small, fixed-size buffers to avoid heap allocations in hot paths.
+
+**Compliant:**
+
+```csharp
+public int SumSmallArray(ReadOnlySpan<int> values)
+{
+    Span<int> buffer = stackalloc int[values.Length];
+    values.CopyTo(buffer);
+    int sum = 0;
+    foreach (var value in buffer)
+    {
+        sum += value;
+    }
+    return sum;
+}
+```
+
+Guidelines:
+- Limit `stackalloc` to small buffers (typically < 1 KB) to avoid stack overflow.
+- Use `stackalloc` with `Span<T>`; avoid unsafe pointer arithmetic.
+- Prefer `stackalloc` over pooled arrays for short-lived, small buffers.
+
+## IAsyncEnumerable<T>
+
+Use `IAsyncEnumerable<T>` for streaming large datasets or consuming async sequences without buffering everything in memory.
+
+**Compliant:**
+
+```csharp
+public async IAsyncEnumerable<OrderDto> StreamOrdersAsync(
+    [EnumeratorCancellation] CancellationToken ct = default)
+{
+    await foreach (var order in _repository.StreamAllAsync(ct))
+    {
+        yield return MapToDto(order);
+    }
+}
+```
+
+Consumption:
+
+```csharp
+await foreach (var order in orderService.StreamOrdersAsync(ct))
+{
+    await ProcessAsync(order, ct);
+}
+```
+
+Guidelines:
+- Use `IAsyncEnumerable<T>` for paginated or streamed data instead of `Task<List<T>>`.
+- Apply `[EnumeratorCancellation]` to ensure cancellation tokens flow correctly.
+- Avoid materializing `IAsyncEnumerable<T>` into a list unless the consumer requires random access.
+
+---
+
 # Nullable Reference Types
 
 Enable nullable reference types (`<Nullable>enable</Nullable>`) in all projects. This shifts null safety from runtime exceptions to compile-time warnings.
@@ -1468,6 +1585,97 @@ Guidelines:
 - Do not globally disable nullable reference types.
 - Do not add `?` to every reference type to silence warnings; this defeats the purpose.
 - Treat nullable warnings as errors in CI.
+
+---
+
+# Modern C# Disposal Patterns
+
+Use modern disposal patterns to ensure deterministic resource cleanup, especially in async code. Prefer `IAsyncDisposable`, `using` declarations, and safe null-coalescing disposal.
+
+## IAsyncDisposable
+
+Implement `IAsyncDisposable` when cleanup involves async I/O (e.g., flushing streams, closing connections).
+
+**Compliant:**
+
+```csharp
+public sealed class AsyncResource : IAsyncDisposable
+{
+    private readonly Stream _stream;
+
+    public AsyncResource(Stream stream)
+    {
+        _stream = stream;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _stream.FlushAsync();
+        await _stream.DisposeAsync();
+    }
+}
+```
+
+Usage:
+
+```csharp
+await using var resource = new AsyncResource(stream);
+// Use resource
+```
+
+Guidelines:
+
+- Implement `IAsyncDisposable` when disposal involves async operations.
+- Return `ValueTask` from `DisposeAsync` for efficient single await.
+- If a type implements both `IDisposable` and `IAsyncDisposable`, prefer `await using`.
+
+## using Declarations
+
+Use `using` declarations (C# 8+) for concise, scope-bound resource management.
+
+**Compliant:**
+
+```csharp
+public async Task ProcessFileAsync(string path)
+{
+    using var stream = File.OpenRead(path);
+    using var reader = new StreamReader(stream);
+    var content = await reader.ReadToEndAsync();
+    // stream and reader disposed at end of scope
+}
+```
+
+Guidelines:
+
+- Prefer `using var` over explicit `try/finally` with `Dispose()` for local resources.
+- Use `await using var` for `IAsyncDisposable` types.
+- Avoid nesting `using` declarations too deeply; extract methods if disposal becomes complex.
+
+## Safe Null-Coalescing Disposal
+
+Dispose nested dependencies safely without null checks cluttering `Dispose` methods.
+
+**Compliant:**
+
+```csharp
+public sealed class CompositeResource : IDisposable
+{
+    private readonly IDisposable? _first;
+    private readonly IDisposable? _second;
+
+    public void Dispose()
+    {
+        _first?.Dispose();
+        _second?.Dispose();
+    }
+}
+```
+
+Guidelines:
+
+- Use null-conditional disposal (`?.Dispose()`) for optional dependencies.
+- Implement dispose patterns only when a class holds unmanaged resources or complex hierarchies.
+- Do not implement a finalizer unless the class directly owns unmanaged resources.
 
 ---
 
@@ -2405,6 +2613,52 @@ Guidelines:
 
 ---
 
+# System.Threading.Channels
+
+`System.Threading.Channels` provides a bounded or unbounded queue for producer-consumer scenarios, especially useful for backpressure-aware processing pipelines.
+
+## Bounded Channel
+
+Use a bounded channel to apply backpressure when the consumer cannot keep up with the producer.
+
+```csharp
+public sealed class OrderProcessor
+{
+    private readonly Channel<Order> _channel;
+
+    public OrderProcessor()
+    {
+        _channel = Channel.CreateBounded<Order>(new BoundedChannelOptions(1000)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
+    }
+
+    public async Task EnqueueAsync(Order order, CancellationToken ct = default)
+    {
+        await _channel.Writer.WriteAsync(order, ct);
+    }
+
+    public async Task ProcessAsync(CancellationToken ct = default)
+    {
+        await foreach (var order in _channel.Reader.ReadAllAsync(ct))
+        {
+            await ProcessSingleAsync(order, ct);
+        }
+    }
+}
+```
+
+Guidelines:
+- Use `CreateBounded` when memory is constrained or backpressure is required.
+- Set `FullMode` to `Wait` rather than dropping items.
+- Use `CreateUnbounded` only when memory is not a concern and dropping is unacceptable.
+- Always complete the channel writer (`_channel.Writer.Complete()`) on shutdown.
+
+---
+
 # Caching
 
 Prefer `IMemoryCache` for short-lived, per-process caches. Use `IDistributedCache` for multi-node environments.
@@ -2810,6 +3064,76 @@ Guidelines:
 
 ---
 
+# gRPC
+
+Use gRPC for high-performance, contract-first communication between internal services. gRPC is well-suited for service-to-service calls where both endpoints are under your control.
+
+## When to Use gRPC
+
+Prefer gRPC over REST when:
+
+- Both client and server are internal services.
+- High throughput and low latency are required.
+- Strongly typed contracts are preferred over HTTP resources.
+- Bidirectional streaming is needed.
+
+Avoid gRPC for public-facing edge APIs (browsers and CDNs may have limited support).
+
+## Protobuf Contracts
+
+Define service contracts using Protocol Buffers (protobuf).
+
+```protobuf
+syntax = "proto3";
+option csharp_namespace = "MyApp.Contracts";
+
+service OrderService {
+    rpc CreateOrder (CreateOrderRequest) returns (OrderDto);
+    rpc StreamOrders (stream OrderFilter) returns (stream OrderDto);
+}
+
+message CreateOrderRequest {
+    string customer_id = 1;
+    repeated OrderItem items = 2;
+}
+
+message OrderDto {
+    string id = 1;
+    string status = 2;
+}
+```
+
+Guidelines:
+- Keep proto contracts in a shared project or NuGet package consumed by both client and server.
+- Use `string` for GUIDs in protobuf; map to `Guid` in C# via converters.
+- Avoid breaking changes; prefer additive evolution.
+
+## Server Registration
+
+```csharp
+builder.Services.AddGrpc();
+
+var app = builder.Build();
+app.MapGrpcService<OrderServiceImpl>();
+```
+
+## Client Registration
+
+```csharp
+services.AddGrpcClient<IOrderServiceClient>("orders", options =>
+{
+    options.Address = new Uri("https://orders-service:443");
+})
+    .AddHttpMessageHandler<ServiceIdentityHandler>();
+```
+
+Guidelines:
+- Use `AddGrpcClient` for typed gRPC clients with `IHttpClientFactory` integration.
+- Add message handlers for service identity when calling between services.
+- Configure deadline/timeout on individual calls, not globally.
+
+---
+
 # Authentication & Authorization
 
 ## JWT Authentication
@@ -2965,6 +3289,125 @@ Guidelines:
 - Use short-lived service tokens rotated automatically.
 - Validate service identity in addition to user identity at API boundaries.
 - Log authentication failures for security monitoring.
+
+---
+
+# HttpClient & IHttpClientFactory
+
+Use `IHttpClientFactory` for all HTTP calls. It manages `HttpClient` lifetime, avoids socket exhaustion, and supports named/typed clients with middleware pipelines.
+
+## Named Clients
+
+Register named clients for specific downstream services.
+
+```csharp
+services.AddHttpClient("inventory", client =>
+{
+    client.BaseAddress = new Uri("https://inventory-service");
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
+```
+
+Usage:
+
+```csharp
+public sealed class InventoryClient
+{
+    private readonly IHttpClientFactory _factory;
+
+    public InventoryClient(IHttpClientFactory factory)
+    {
+        _factory = factory;
+    }
+
+    public async Task<StockLevel?> GetStockAsync(Guid productId, CancellationToken ct)
+    {
+        var client = _factory.CreateClient("inventory");
+        return await client.GetFromJsonAsync<StockLevel>($"/stock/{productId}", ct);
+    }
+}
+```
+
+## Typed Clients
+
+Prefer typed clients when a service always uses the same configuration.
+
+```csharp
+services.AddHttpClient<IInventoryClient, InventoryClient>(client =>
+{
+    client.BaseAddress = new Uri("https://inventory-service");
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
+```
+
+## DelegatingHandlers
+
+Use `DelegatingHandler` for cross-cutting concerns like logging, retry, or authentication.
+
+```csharp
+public sealed class CorrelationIdHandler : DelegatingHandler
+{
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        request.Headers.Add("X-Correlation-Id", Activity.Current?.Id ?? Guid.NewGuid().ToString());
+        return await base.SendAsync(request, cancellationToken);
+    }
+}
+```
+
+Registration:
+
+```csharp
+services.AddHttpClient<IInventoryClient, InventoryClient>()
+    .AddHttpMessageHandler<CorrelationIdHandler>();
+```
+
+Guidelines:
+- Never create `HttpClient` with `new HttpClient()` directly; always use `IHttpClientFactory`.
+- Use typed clients for service-specific wrappers; named clients for ad-hoc calls.
+- Keep `DelegatingHandler` stateless and focused on a single concern.
+- Configure timeouts per client, not globally.
+
+---
+
+# Distributed Tracing
+
+Propagate correlation IDs (`traceparent`, `correlation-id`) across all events and HTTP calls. Include correlation IDs in every log entry and event metadata.
+
+```csharp
+public sealed class CorrelationIdMiddleware : IMiddleware
+{
+    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    {
+        var correlationId = context.Request.Headers["X-Correlation-Id"].FirstOrDefault()
+            ?? Guid.NewGuid().ToString();
+
+        context.Items["CorrelationId"] = correlationId;
+
+        using (LogContext.PushProperty("CorrelationId", correlationId))
+        {
+            await next(context);
+        }
+    }
+}
+```
+
+Event propagation:
+
+```csharp
+public sealed record OrderCreatedEvent
+{
+    public required Guid OrderId { get; init; }
+    public required string CorrelationId { get; init; }
+}
+```
+
+Guidelines:
+- Use `ActivitySource` and `Activity` for spans; avoid manual string concatenation.
+- Propagate `traceparent` header in HTTP calls and event metadata.
+- Include correlation IDs in all structured logs for end-to-end request tracking.
+- Use OpenTelemetry exporters to collect traces from all services.
 
 ---
 
