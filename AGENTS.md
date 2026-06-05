@@ -28,6 +28,8 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [Domain Behaviour Pattern](#domain-behaviour-pattern)
 - [Value Objects](#value-objects)
 - [Service Lifetimes](#service-lifetimes)
+- [Nullable Reference Types](#nullable-reference-types)
+- [Generic Variance](#generic-variance)
 
 ## Part II: ASP.NET Core & System Architecture
 
@@ -48,14 +50,20 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [Logging](#logging)
   - [Health Checks](#health-checks)
   - [Background Jobs](#background-jobs)
+  - [Middleware & Filters](#middleware--filters)
 - [Worker Services](#worker-services)
 - [Caching](#caching)
+  - [Output Caching & Response Caching](#output-caching--response-caching)
 - [Rate Limiting](#rate-limiting)
 - [OpenAPI](#openapi)
 - [Feature Flags](#feature-flags)
 - [CQRS](#cqrs)
+- [System.Text.Json](#systemtextjson)
+- [Authentication & Authorization](#authentication--authorization)
+- [Metrics & OpenTelemetry](#metrics--opentelemetry)
 - [Persistence Standards](#persistence-standards)
 - [Testing Standards](#testing-standards)
+  - [Integration Testing](#integration-testing)
 - [Security Standards](#security-standards)
 - [Problem Details](#problem-details)
 
@@ -1293,6 +1301,176 @@ Guidelines:
 
 ---
 
+# Generic Variance
+
+C# supports generic variance through the `in` and `out` keywords on interface type parameters. Variance controls whether a generic interface can be implicitly converted when its type arguments have an inheritance relationship.
+
+## Covariance (`out`)
+
+A type parameter marked with `out` is covariant. It allows a more derived type to be used where a less derived type is expected. Covariance only applies to return types (output positions).
+
+**Compliant:**
+
+```csharp
+public interface IEventReader<out TEvent>
+{
+    TEvent Read();
+}
+
+public sealed class OrderEventReader : IEventReader<OrderCreatedEvent>
+{
+    public OrderCreatedEvent Read()
+    {
+        return new OrderCreatedEvent(Guid.NewGuid());
+    }
+}
+
+// Usage: covariant assignment
+IEventReader<object> reader = new OrderEventReader(); // Valid because OrderCreatedEvent : object
+```
+
+Guidelines:
+- Use `out` for interfaces that only produce values (readers, factories, sequences).
+- `IEnumerable<T>` is covariant because it only outputs values.
+- Do not declare `out` parameters if the interface has any method that accepts `T` as input.
+
+## Contravariance (`in`)
+
+A type parameter marked with `in` is contravariant. It allows a less derived type to be used where a more derived type is expected. Contravariance only applies to input positions (parameters).
+
+**Compliant:**
+
+```csharp
+public interface IEventHandler<in TEvent>
+{
+    void Handle(TEvent @event);
+}
+
+public sealed class DomainEventHandler : IEventHandler<DomainEvent>
+{
+    public void Handle(DomainEvent @event)
+    {
+        Console.WriteLine($"Handled: {@event.GetType().Name}");
+    }
+}
+
+// Usage: contravariant assignment
+IEventHandler<OrderCreatedEvent> handler = new DomainEventHandler(); // Valid because OrderCreatedEvent : DomainEvent
+```
+
+Guidelines:
+- Use `in` for interfaces that only consume values (handlers, comparers, writers).
+- `IComparer<T>` is contravariant because it only accepts values for comparison.
+- Do not declare `in` parameters if the interface has any method that returns `T`.
+
+## Invariance (default)
+
+Without `in` or `out`, the type parameter is invariant. The exact type must match; no implicit conversion is allowed.
+
+**Noncompliant:**
+
+```csharp
+public interface IRepository<T> // Invariant
+{
+    T GetById(Guid id);
+    void Save(T entity);
+}
+
+// This interface cannot safely be covariant or contravariant
+// because T appears in both input and output positions.
+```
+
+Guidelines:
+- Keep interfaces invariant unless there is a clear, safe use case for variance.
+- Do not add `in` or `out` to type parameters that appear in both input and output positions.
+- Prefer explicit variance declarations to communicate intent to consumers.
+
+---
+
+# Nullable Reference Types
+
+Enable nullable reference types (`<Nullable>enable</Nullable>`) in all projects. This shifts null safety from runtime exceptions to compile-time warnings.
+
+## Nullability Annotations
+
+Use `?` to annotate nullable reference types. Omit it for non-nullable references.
+
+**Compliant:**
+
+```csharp
+public sealed class User
+{
+    public required string Email { get; init; } // Non-nullable: must be provided
+    public string? Nickname { get; init; }     // Nullable: may be omitted
+}
+```
+
+Guidelines:
+- Default to non-nullable. Only mark `?` when `null` is a meaningful, expected state.
+- Use `null` for optional or missing values, not magic strings like `""`.
+- Always check for `null` before dereferencing nullable references, or use the null-forgiving operator `!` only when the compiler cannot prove non-nullability but you can.
+
+## Null-Forgiving Operator (`!`)
+
+Use `!` sparingly. It suppresses compiler warnings but does not change runtime behaviour.
+
+**Noncompliant:**
+
+```csharp
+public string GetUppercase(string? name)
+{
+    return name!.ToUpper(); // Risky: name could still be null at runtime
+}
+```
+
+**Compliant:**
+
+```csharp
+public string GetUppercase(string? name)
+{
+    ArgumentNullException.ThrowIfNull(name);
+    return name.ToUpper();
+}
+```
+
+Guidelines:
+- Prefer explicit null checks or `??` fallback over `!`.
+- Use `!` only after validation or when the framework guarantees non-null (e.g., `ArgumentNullException.ThrowIfNull`).
+
+## Nullable Value Types (`Nullable<T>`)
+
+Value types are inherently non-nullable. Use `T?` shorthand for `Nullable<T>` when a value type needs to represent absence.
+
+**Compliant:**
+
+```csharp
+public sealed class Order
+{
+    public required DateTimeOffset CreatedAt { get; init; }
+    public DateTimeOffset? ShippedAt { get; init; } // May not have shipped yet
+}
+```
+
+Guidelines:
+- Use `DateTimeOffset?` instead of `DateTimeOffset.MinValue` for optional dates.
+- Use `int?` instead of sentinel values like `-1` for optional integers.
+
+## Migration Strategy
+
+When enabling nullable reference types on an existing codebase:
+
+1. Start at the leaf nodes (domain models, value objects) and work outward.
+2. Suppress warnings temporarily with `#nullable disable` around legacy code blocks, not globally.
+3. Add `?` to parameters and properties that legitimately accept `null`.
+4. Remove `#nullable disable` as each section is migrated.
+
+Guidelines:
+- Do not globally disable nullable reference types.
+- Do not add `?` to every reference type to silence warnings; this defeats the purpose.
+- Treat nullable warnings as errors in CI.
+
+---
+
 # Architecture
 
 ## General
@@ -1976,6 +2154,109 @@ Guidelines:
 
 ---
 
+## Middleware & Filters
+
+Keep middleware thin and focused on cross-cutting HTTP concerns: logging, correlation IDs, authentication, and exception handling. Place business logic in application services, not middleware.
+
+### Middleware Ordering
+
+Middleware runs in the order it is added. The correct sequence matters:
+
+```csharp
+app.UseExceptionHandler();
+app.UseHttpsRedirection();
+app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseRateLimiter();
+app.UseOutputCache();
+app.MapControllers();
+```
+
+Guidelines:
+- Register `UseExceptionHandler` early to catch exceptions from downstream middleware.
+- Register `UseAuthentication` and `UseAuthorization` before endpoints that require auth.
+- Register `UseOutputCache` after auth so cached responses respect identity.
+
+### Action Filters
+
+Use action filters for cross-cutting concerns that apply to specific controllers or actions.
+
+```csharp
+public sealed class ValidateModelStateFilter : IActionFilter
+{
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        if (!context.ModelState.IsValid)
+        {
+            context.Result = new BadRequestObjectResult(context.ModelState);
+        }
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context)
+    {
+        // Post-action logic
+    }
+}
+```
+
+Registration:
+
+```csharp
+services.AddControllers(options =>
+{
+    options.Filters.Add<ValidateModelStateFilter>();
+});
+```
+
+Guidelines:
+- Prefer middleware for global concerns; use filters when the concern only applies to MVC/minimal API routes.
+- Keep filters stateless; use constructor injection for dependencies.
+- Do not perform business logic inside filters.
+
+### Exception Handling Middleware
+
+Global exception handling should translate unhandled exceptions to [`ProblemDetails`](AGENTS.md:1033) responses and log appropriately.
+
+```csharp
+public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(
+        HttpContext httpContext,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        logger.LogError(exception, "Unhandled exception occurred");
+
+        var problemDetails = new ProblemDetails
+        {
+            Status = StatusCodes.Status500InternalServerError,
+            Title = "An error occurred",
+            Detail = exception.Message
+        };
+
+        httpContext.Response.StatusCode = problemDetails.Status.Value;
+        await httpContext.Response.WriteAsJsonAsync(problemDetails, cancellationToken);
+
+        return true;
+    }
+}
+```
+
+Registration:
+
+```csharp
+services.AddExceptionHandler<GlobalExceptionHandler>();
+services.AddProblemDetails();
+```
+
+Guidelines:
+- Use `IExceptionHandler` (.NET 8+) over custom middleware when possible.
+- Never expose stack traces or sensitive details in production responses.
+- Always log the full exception with correlation IDs before returning a sanitized response.
+
+---
+
 # Worker Services
 
 Worker services are headless, non-HTTP applications designed for long-running background processing, scheduled tasks, event consumers, and message-driven workflows. They run independently of any web API and are deployed as separate processes.
@@ -2230,6 +2511,74 @@ Guidelines:
 
 ---
 
+## Output Caching & Response Caching
+
+### Response Caching
+
+Use `[ResponseCache]` for simple HTTP-based caching where the browser or intermediary CDN should cache the response.
+
+```csharp
+[ResponseCache(Duration = 60, Location = ResponseCacheLocation.Any)]
+[HttpGet("products/{id}")]
+public async Task<ActionResult<ProductDto>> GetProduct(Guid id)
+{
+    // ...
+}
+```
+
+Guidelines:
+- Use `ResponseCache` for static or rarely changing data.
+- Set `VaryByQueryKeys` when the response depends on query parameters.
+- Do not use response caching for authenticated or user-specific data without `VaryByHeader` for Authorization.
+
+### Output Caching (.NET 7+)
+
+Use `OutputCache` for server-side response caching with more control over cache keys, tags, and invalidation.
+
+```csharp
+builder.Services.AddOutputCache(options =>
+{
+    options.AddBasePolicy(builder =>
+        builder.Expire(TimeSpan.FromSeconds(10)));
+    options.AddPolicy("Long", builder =>
+        builder.Expire(TimeSpan.FromMinutes(1)).Tag("products"));
+});
+
+app.UseOutputCache();
+```
+
+Usage:
+
+```csharp
+[HttpGet("products")]
+[OutputCache(PolicyName = "Long")]
+public async Task<ActionResult<List<ProductDto>>> ListProducts()
+{
+    // ...
+}
+```
+
+Invalidation:
+
+```csharp
+[HttpPost("products")]
+[OutputCache(PolicyName = "Long")]
+public async Task<ActionResult<ProductDto>> CreateProduct(CreateProductRequest request)
+{
+    // ...
+    await outputCacheStore.EvictByTagAsync("products", CancellationToken.None);
+    // ...
+}
+```
+
+Guidelines:
+- Prefer `OutputCache` over `ResponseCache` for ASP.NET Core server-side caching.
+- Use cache tags for logical grouping and bulk invalidation.
+- Configure `OutputCache` after `UseAuthentication` so cached entries respect the user identity.
+- For multi-node deployments, configure a distributed output cache provider (e.g., Redis).
+
+---
+
 # Rate Limiting
 
 Use ASP.NET Core rate limiting to protect endpoints from abuse and ensure fair resource usage.
@@ -2378,6 +2727,247 @@ Guidelines:
 
 ---
 
+# System.Text.Json
+
+Use `System.Text.Json` for all serialization. It is built-in, faster than Newtonsoft.Json, and integrates natively with ASP.NET Core.
+
+## Custom Converters
+
+Create converters for domain types that do not serialize naturally.
+
+```csharp
+public sealed class MoneyJsonConverter : JsonConverter<Money>
+{
+    public override Money Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        var root = document.RootElement;
+
+        var amount = root.GetProperty("amount").GetDecimal();
+        var currency = root.GetProperty("currency").GetString()!;
+
+        return new Money { Amount = amount, Currency = currency };
+    }
+
+    public override void Write(Utf8JsonWriter writer, Money value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("amount", value.Amount);
+        writer.WriteString("currency", value.Currency);
+        writer.WriteEndObject();
+    }
+}
+```
+
+Registration:
+
+```csharp
+services.Configure<JsonOptions>(options =>
+{
+    options.SerializerOptions.Converters.Add(new MoneyJsonConverter());
+});
+```
+
+## Polymorphic Deserialization
+
+Use `JsonDerivedType` attributes to enable polymorphic deserialization with the derived type discriminator.
+
+```csharp
+[JsonDerivedType(typeof(OrderCreatedEvent), "orderCreated")]
+[JsonDerivedType(typeof(OrderShippedEvent), "orderShipped")]
+public abstract class DomainEvent
+{
+    public required Guid EventId { get; init; }
+    public required DateTimeOffset OccurredAt { get; init; }
+}
+```
+
+## Source Generators
+
+For high-performance scenarios or ahead-of-time compilation, use source generators to avoid runtime reflection.
+
+```csharp
+[JsonSerializable(typeof(OrderDto))]
+[JsonSerializable(typeof(List<OrderDto>))]
+public partial class OrderJsonContext : JsonSerializerContext
+{
+}
+```
+
+Usage:
+
+```csharp
+var order = JsonSerializer.Deserialize(json, OrderJsonContext.Default.OrderDto);
+```
+
+Guidelines:
+
+- Prefer `System.Text.Json` over Newtonsoft.Json for new projects.
+- Use custom converters for value objects and domain types.
+- Use source generators for Native AOT or high-throughput serialization.
+- Configure `JsonSerializerOptions` once and reuse via `IOptions<JsonOptions>` or a static singleton.
+- Avoid `JsonSerializerOptions.Default` in hot paths; cache and reuse options instances.
+
+---
+
+# Authentication & Authorization
+
+## JWT Authentication
+
+Use JWT bearer tokens for stateless authentication in ASP.NET Core APIs. Prefer short-lived access tokens with longer-lived refresh tokens.
+
+```csharp
+public sealed class ConfigureJwtAuthentication : IConfigureOptions<AuthenticationOptions>
+{
+    private readonly IConfiguration _configuration;
+
+    public ConfigureJwtAuthentication(IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
+    public void Configure(AuthenticationOptions options)
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    }
+}
+```
+
+Token validation configuration:
+
+```csharp
+public sealed class ConfigureJwtBearerOptions : IConfigureOptions<JwtBearerOptions>
+{
+    private readonly IOptions<JwtOptions> _jwtOptions;
+
+    public ConfigureJwtBearerOptions(IOptions<JwtOptions> jwtOptions)
+    {
+        _jwtOptions = jwtOptions;
+    }
+
+    public void Configure(JwtBearerOptions options)
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = _jwtOptions.Value.Issuer,
+            ValidAudience = _jwtOptions.Value.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(_jwtOptions.Value.SecretKey))
+        };
+    }
+}
+```
+
+Guidelines:
+- Use strongly typed `JwtOptions` bound from configuration.
+- Never store signing keys in source control; use secret management.
+- Set short token expiry (15 minutes typical for access tokens).
+- Use refresh tokens with secure storage (httpOnly cookies or secure token stores).
+- Validate all token parameters (`Issuer`, `Audience`, `Lifetime`, `SigningKey`).
+
+## Claims-Based Authorization
+
+Prefer claims-based authorization over role-based authorization. Claims provide fine-grained, context-aware permissions.
+
+```csharp
+public sealed class PermissionRequirement : IAuthorizationRequirement
+{
+    public required string Permission { get; init; }
+}
+
+public sealed class PermissionHandler : AuthorizationHandler<PermissionRequirement>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        PermissionRequirement requirement)
+    {
+        var userPermission = context.User.FindFirst("permission")?.Value;
+        if (userPermission == requirement.Permission)
+        {
+            context.Succeed(requirement);
+        }
+
+        return Task.CompletedTask;
+    }
+}
+```
+
+Policy registration:
+
+```csharp
+services.AddAuthorization(options =>
+{
+    options.AddPolicy("CanCreateOrders", policy =>
+        policy.Requirements.Add(new PermissionRequirement { Permission = "orders:create" }));
+
+    options.AddPolicy("CanDeleteOrders", policy =>
+        policy.RequireClaim("department", "sales", "admin"));
+});
+
+services.AddSingleton<IAuthorizationHandler, PermissionHandler>();
+```
+
+Usage on endpoints:
+
+```csharp
+[Authorize(Policy = "CanCreateOrders")]
+[HttpPost]
+public async Task<ActionResult<OrderDto>> CreateOrder(CreateOrderRequest request)
+{
+    // ...
+}
+```
+
+Guidelines:
+- Prefer policies over direct `[Authorize(Roles = "...")]` attributes.
+- Derive permissions from claims in the token rather than hardcoding roles.
+- Use `IAuthorizationService` for resource-based authorization when decisions depend on the data being accessed.
+
+## Inter-Service Authentication
+
+Service-to-service calls must be authenticated. Prefer mTLS or signed JWTs for service identities.
+
+```csharp
+public sealed class ServiceIdentityHandler : DelegatingHandler
+{
+    private readonly ITokenProvider _tokenProvider;
+
+    public ServiceIdentityHandler(ITokenProvider tokenProvider)
+    {
+        _tokenProvider = tokenProvider;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        var token = await _tokenProvider.GetServiceTokenAsync(cancellationToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await base.SendAsync(request, cancellationToken);
+    }
+}
+```
+
+Registration:
+
+```csharp
+services.AddHttpClient<IInventoryClient, InventoryClient>()
+    .AddHttpMessageHandler<ServiceIdentityHandler>();
+```
+
+Guidelines:
+- Never trust events from external services without validation.
+- Use short-lived service tokens rotated automatically.
+- Validate service identity in addition to user identity at API boundaries.
+- Log authentication failures for security monitoring.
+
+---
+
 # Persistence Standards
 
 ## Entity Framework Core
@@ -2444,6 +3034,146 @@ Persistence/
 ```
 
 Avoid excessive data annotations. Use Fluent API for all non-trivial configuration.
+
+### Interceptors
+
+Use EF Core interceptors for cross-cutting concerns like auditing, soft deletes, and multi-tenancy.
+
+```csharp
+public sealed class AuditingInterceptor : SaveChangesInterceptor
+{
+    public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        var context = eventData.Context;
+        if (context is null)
+        {
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
+
+        foreach (var entry in context.ChangeTracker.Entries<IAuditable>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                entry.Entity.CreatedAt = DateTimeOffset.UtcNow;
+            }
+
+            if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = DateTimeOffset.UtcNow;
+            }
+        }
+
+        return base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+}
+```
+
+Registration:
+
+```csharp
+services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(connectionString)
+           .AddInterceptors(new AuditingInterceptor()));
+```
+
+Guidelines:
+- Keep interceptors focused on a single concern.
+- Avoid heavy computation inside interceptors; they run on every `SaveChanges`.
+- Use `SaveChangesInterceptor` for auditing and soft deletes.
+- Use `CommandInterceptor` for query logging and retry logic.
+
+### Raw SQL
+
+Use raw SQL only when LINQ cannot express the query efficiently or when calling stored procedures.
+
+```csharp
+public async Task<List<OrderSummary>> GetOrderSummariesAsync(CancellationToken ct = default)
+{
+    var sql = """
+        SELECT o."Id", o."Status", COUNT(i."Id") AS "ItemCount"
+        FROM "Orders" o
+        LEFT JOIN "OrderItems" i ON o."Id" = i."OrderId"
+        WHERE o."Status" = @status
+        GROUP BY o."Id", o."Status"
+        """;
+
+    return await _context.Database
+        .SqlQuery<OrderSummary>($"{sql}", new NpgsqlParameter("@status", "Pending"))
+        .ToListAsync(ct);
+}
+```
+
+Guidelines:
+- Always use parameterized queries; never concatenate user input into SQL strings.
+- Prefer LINQ for simple queries; use raw SQL for complex aggregations or window functions.
+- Map raw SQL results to DTOs, not entities, to avoid tracking issues.
+
+### Global Query Filters
+
+Apply global filters to automatically scope queries. Common uses include soft deletes and multi-tenancy.
+
+```csharp
+public sealed class AppDbContext : DbContext
+{
+    public int TenantId { get; set; }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Order>()
+            .HasQueryFilter(o => o.TenantId == TenantId);
+
+        modelBuilder.Entity<Order>()
+            .HasQueryFilter(o => !o.IsDeleted);
+    }
+}
+```
+
+Guidelines:
+- Use global filters for soft deletes and tenant scoping.
+- Override filters explicitly when needed using `IgnoreQueryFilters()`.
+- Do not rely on global filters for security-critical access control; validate permissions explicitly.
+
+### Split Queries
+
+Use `AsSplitQuery()` for queries that join many collections to avoid Cartesian explosion.
+
+```csharp
+public async Task<List<Order>> GetOrdersWithItemsAsync(CancellationToken ct = default)
+{
+    return await _context.Orders
+        .AsSplitQuery()
+        .Include(o => o.Items)
+        .ToListAsync(ct);
+}
+```
+
+Guidelines:
+- Use split queries when including multiple one-to-many relationships.
+- Avoid split queries for simple queries with a single join; prefer single-query execution.
+- Profile query performance to determine the best strategy.
+
+### Compiled Models
+
+For startup performance improvements, use compiled models to pre-build the EF Core model.
+
+```bash
+dotnet ef dbcontext optimize -o Persistence/CompiledModels -n MyApp.Persistence.CompiledModels
+```
+
+Registration:
+
+```csharp
+services.AddDbContext<AppDbContext>(options =>
+    options.UseModel(MyApp.Persistence.CompiledModels.AppDbContextModel.Instance));
+```
+
+Guidelines:
+- Use compiled models for large models or cold-start-sensitive applications.
+- Regenerate compiled models after any model or configuration change.
+- Do not use compiled models during active development; enable for production builds.
 
 ---
 
@@ -2624,9 +3354,94 @@ Guidelines:
 
 ## Integration Testing
 
-- Use Testcontainers for infrastructure dependencies (databases, message brokers).
-- Test event publishing and consumption end-to-end within a service boundary.
-- Avoid testing other services directly; use contract tests or mocks at boundaries.
+### Custom WebApplicationFactory
+
+Create a custom factory to override DI registrations (e.g., replace real message brokers with test doubles) and start Testcontainers.
+
+```csharp
+public sealed class CustomWebApplicationFactory<TProgram> : WebApplicationFactory<TProgram>
+    where TProgram : class
+{
+    private PostgreSqlContainer? _postgres;
+
+    public string ConnectionString => _postgres?.GetConnectionString() ?? string.Empty;
+
+    public void StartTestContainer()
+    {
+        _postgres = new PostgreSqlBuilder().Build();
+        _postgres.StartAsync().GetAwaiter().GetResult();
+    }
+
+    public void StopTestContainer()
+    {
+        _postgres?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<DbContextOptions<AppDbContext>>();
+            services.AddDbContext<AppDbContext>(options =>
+                options.UseNpgsql(ConnectionString));
+        });
+    }
+}
+```
+
+### Shared Test Fixture
+
+Use a generic test fixture for NUnit that creates the factory once per test run and provides a shared `HttpClient`.
+
+```csharp
+[TestFixture]
+public class TestFixture<TProgram> where TProgram : class
+{
+    public CustomWebApplicationFactory<TProgram> WebApplicationFactory { get; private set; } = null!;
+    public HttpClient Client { get; private set; } = null!;
+
+    [OneTimeSetUp]
+    public void OneTimeSetUp()
+    {
+        WebApplicationFactory = new CustomWebApplicationFactory<TProgram>();
+        WebApplicationFactory.StartTestContainer();
+        Client = WebApplicationFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = true,
+            HandleCookies = true
+        });
+    }
+
+    [OneTimeTearDown]
+    public void OneTimeTearDown()
+    {
+        Client?.Dispose();
+        WebApplicationFactory.StopTestContainer();
+        WebApplicationFactory.Dispose();
+    }
+}
+```
+
+### Usage in Test Classes
+
+```csharp
+[TestFixture]
+public class OrdersApiTests : TestFixture<Program>
+{
+    [Test]
+    public async Task CreateOrder_Should_Return201_When_RequestIsValid()
+    {
+        var response = await Client.PostAsJsonAsync("/orders", new { CustomerId = Guid.NewGuid() });
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+}
+```
+
+Guidelines:
+- Keep integration tests focused on infrastructure and boundary behaviour, not domain logic.
+- Reset database state between tests to avoid leakage.
+- Use `OneTimeSetUp` / `OneTimeTearDown` for expensive shared resources like Testcontainers.
+- Contract tests should validate message shapes and expected responses, not internal implementations.
 
 ---
 
@@ -2696,6 +3511,85 @@ public sealed class IntegrationEventValidator<T> : IEventValidator<T> where T : 
     }
 }
 ```
+
+---
+
+# Metrics & OpenTelemetry
+
+Use `IMeterFactory` and `System.Diagnostics.Metrics` for application metrics. Instrument code with counters, histograms, and gauges, then export via OpenTelemetry.
+
+## Counters
+
+Counters are for counting monotonically increasing values such as requests processed or orders created.
+
+```csharp
+public sealed class OrderMetrics
+{
+    private readonly Counter<int> _ordersCreated;
+
+    public OrderMetrics(IMeterFactory meterFactory)
+    {
+        var meter = meterFactory.Create("OrderMetrics");
+        _ordersCreated = meter.CreateCounter<int>("orders.created", description: "Number of orders created");
+    }
+
+    public void OrderCreated()
+    {
+        _ordersCreated.Add(1);
+    }
+}
+```
+
+## Histograms
+
+Histograms measure distributions such as request duration or order value.
+
+```csharp
+public sealed class OrderMetrics
+{
+    private readonly Histogram<double> _orderValue;
+
+    public OrderMetrics(IMeterFactory meterFactory)
+    {
+        var meter = meterFactory.Create("OrderMetrics");
+        _orderValue = meter.CreateHistogram<double>("order.value", unit: "GBP", description: "Order value distribution");
+    }
+
+    public void RecordOrderValue(decimal value)
+    {
+        _orderValue.Record((double)value);
+    }
+}
+```
+
+## Observability Pipeline
+
+Configure OpenTelemetry to export traces and metrics to your observability backend.
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing.AddAspNetCoreInstrumentation()
+               .AddHttpClientInstrumentation()
+               .AddSource("OrderMetrics")
+               .AddOtlpExporter();
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics.AddAspNetCoreInstrumentation()
+               .AddHttpClientInstrumentation()
+               .AddMeter("OrderMetrics")
+               .AddOtlpExporter();
+    });
+```
+
+Guidelines:
+- Use `IMeterFactory` rather than creating `Meter` instances directly; it respects DI scoping and disposal.
+- Name meters with the service or feature they represent.
+- Add units and descriptions to instruments for clarity in dashboards.
+- Export via OTLP for vendor-agnostic observability.
+- Do not log metrics; emit them through `Meter` instruments.
 
 ---
 
