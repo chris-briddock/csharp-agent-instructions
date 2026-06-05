@@ -17,6 +17,8 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [Naming](#naming)
   - [Language Features](#language-features)
   - [Async](#async)
+  - [Locking](#locking)
+  - [Multi-Threading](#multi-threading)
   - [Exceptions](#exceptions)
   - [LINQ](#linq)
 - [Documentation Standards](#documentation-standards)
@@ -24,6 +26,8 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [Options Pattern](#options-pattern)
 - [Preferred Framework Patterns](#preferred-framework-patterns)
 - [Domain Behaviour Pattern](#domain-behaviour-pattern)
+- [Value Objects](#value-objects)
+- [Service Lifetimes](#service-lifetimes)
 
 ## Part II: ASP.NET Core & System Architecture
 
@@ -38,9 +42,18 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [ASP.NET Core Standards](#aspnet-core-standards)
   - [API Style](#api-style)
   - [Endpoint Design](#endpoint-design)
+  - [API Versioning](#api-versioning)
   - [Dependency Injection](#dependency-injection)
   - [Configuration](#configuration)
   - [Logging](#logging)
+  - [Health Checks](#health-checks)
+  - [Background Jobs](#background-jobs)
+- [Worker Services](#worker-services)
+- [Caching](#caching)
+- [Rate Limiting](#rate-limiting)
+- [OpenAPI](#openapi)
+- [Feature Flags](#feature-flags)
+- [CQRS](#cqrs)
 - [Persistence Standards](#persistence-standards)
 - [Testing Standards](#testing-standards)
 - [Security Standards](#security-standards)
@@ -109,15 +122,6 @@ HasPermission
 CanDelete
 ```
 
-### Interfaces
-
-Prefix with I.
-
-```csharp
-IUserRepository
-IEmailSender
-```
-
 ### Fields
 
 Use _camelCase for private fields.
@@ -129,6 +133,55 @@ private readonly ILogger<UserService> _logger;
 ### Parameters and Locals
 
 Use camelCase.
+
+---
+
+### Interfaces
+
+Prefix with I.
+
+```csharp
+IUserRepository
+IEmailSender
+```
+
+#### When to Add an Interface
+
+Introduce an interface when there is a demonstrated need for abstraction — not by default for every class.
+
+**Introduce an interface when:**
+
+- There are multiple implementations (e.g., `SmtpEmailSender` and `SendGridEmailSender`).
+- The type is part of a public API contract that consumers should depend on.
+- Testing requires substituting the dependency (e.g., mocking `IOrderRepository`).
+- The abstraction crosses a significant boundary (persistence, external services, infrastructure).
+
+**Do not introduce an interface when:**
+
+- There is only one implementation and no expectation of alternates.
+- The type is an internal detail that will never be substituted.
+- The abstraction adds indirection without value (YAGNI).
+
+**Noncompliant:**
+
+```csharp
+// Single implementation, no alternates planned
+public interface IOrderService { }
+public sealed class OrderService : IOrderService { }
+```
+
+**Compliant:**
+
+```csharp
+// Multiple implementations expected
+public interface IEmailSender
+{
+    Task SendAsync(EmailMessage message, CancellationToken ct);
+}
+
+public sealed class SmtpEmailSender : IEmailSender { }
+public sealed class SendGridEmailSender : IEmailSender { }
+```
 
 ---
 
@@ -169,13 +222,32 @@ public sealed record CreateUserRequest(
 
 ### Required Members
 
-Use required properties where appropriate.
+Use required properties where appropriate to enforce initialization at construction time.
+
+```csharp
+public sealed class CreateUserCommand
+{
+    public required string Email { get; init; }
+    public required string Password { get; init; }
+}
+```
 
 ### Primary Constructors
 
-Use when they improve readability.
+Use when they improve readability by reducing boilerplate for simple classes with few dependencies.
 
-Avoid excessive constructor parameter lists.
+```csharp
+public sealed class UserService(ILogger<UserService> logger, IUserRepository repository)
+{
+    public async Task<User> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        logger.LogInformation("Fetching user {UserId}", id);
+        return await repository.GetByIdAsync(id, ct);
+    }
+}
+```
+
+Avoid excessive constructor parameter lists. When a class has more than four or five dependencies, consider refactoring into smaller, more focused classes.
 
 ### Collection Expressions
 
@@ -195,45 +267,627 @@ if (user is null)
 }
 ```
 
+### AsyncLocal
+
+Use `AsyncLocal<T>` for state that must flow across async boundaries. Unlike `ThreadStatic`, values follow the async execution context even when continuations resume on different threads.
+
+**Noncompliant:**
+
+```csharp
+[ThreadStatic]
+private static int _counter;
+
+public async Task ProcessAsync()
+{
+    _counter++;
+    await Task.Delay(100);
+    Console.WriteLine(_counter); // May be wrong thread
+}
+```
+
+**Compliant:**
+
+```csharp
+private static readonly AsyncLocal<int> _counter = new();
+
+public async Task ProcessAsync()
+{
+    _counter.Value++;
+    await Task.Delay(100);
+    Console.WriteLine(_counter.Value);
+}
+```
+
 ---
 
 ## Async
 
-Use asynchronous APIs for I/O operations.
+Use asynchronous APIs for all I/O operations. Asynchronous code scales better and avoids blocking threads.
 
-Avoid:
+### Avoid Blocking
+
+Never block on asynchronous code. These patterns cause deadlocks in many contexts and defeat the purpose of `async`/`await`.
+
+**Noncompliant:**
 
 ```csharp
-.Result
-.Wait()
-.GetAwaiter().GetResult()
+public User GetUser(Guid id)
+{
+    // Deadlock risk in ASP.NET Core
+    return _repository.GetByIdAsync(id).Result;
+}
 ```
 
-Prefer:
+**Compliant:**
 
 ```csharp
-await repository.SaveAsync();
+public async Task<User> GetUserAsync(Guid id)
+{
+    return await _repository.GetByIdAsync(id);
+}
+```
+
+### Propagate Async Throughout the Call Stack
+
+Async calls should propagate all the way up the call stack.
+
+**Noncompliant:**
+
+```csharp
+public User GetUser(Guid id)
+{
+    return GetUserAsync(id).GetAwaiter().GetResult();
+}
+
+private async Task<User> GetUserAsync(Guid id)
+{
+    return await _repository.GetByIdAsync(id);
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task<User> GetUserAsync(Guid id)
+{
+    return await _repository.GetByIdAsync(id);
+}
+```
+
+### Prefer `await` over synchronous equivalents
+
+**Noncompliant:**
+
+```csharp
+public void ProcessFile(string path)
+{
+    var text = File.ReadAllText(path);
+    Console.WriteLine(text);
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task ProcessFileAsync(string path)
+{
+    var text = await File.ReadAllTextAsync(path);
+    Console.WriteLine(text);
+}
+```
+
+### Always pass `CancellationToken`
+
+Thread cancellation is a cooperative mechanism. Propagate cancellation tokens to allow graceful shutdown and timeout handling.
+
+**Noncompliant:**
+
+```csharp
+public async Task<List<Order>> GetOrdersAsync()
+{
+    return await _context.Orders.ToListAsync();
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task<List<Order>> GetOrdersAsync(CancellationToken ct = default)
+{
+    return await _context.Orders.ToListAsync(ct);
+}
+```
+
+### Avoid `async void`
+
+`async void` methods cannot be awaited and exceptions thrown inside them crash the process. Use `async Task` instead, except for top-level event handlers.
+
+**Noncompliant:**
+
+```csharp
+public async void ProcessOrder(Guid orderId)
+{
+    await _orderService.ProcessAsync(orderId);
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task ProcessOrderAsync(Guid orderId)
+{
+    await _orderService.ProcessAsync(orderId);
+}
+```
+
+### Return `Task` directly when no post-processing is needed
+
+When a method does nothing after an awaited call, return the `Task` directly to avoid creating an unnecessary state machine.
+
+**Noncompliant:**
+
+```csharp
+public async Task SaveAsync(Order order)
+{
+    await _repository.SaveAsync(order);
+}
+```
+
+**Compliant:**
+
+```csharp
+public Task SaveAsync(Order order)
+{
+    return _repository.SaveAsync(order);
+}
+```
+
+### Do not use `Task.Run` for I/O-bound work
+
+`Task.Run` is for CPU-bound work. For I/O, use native async APIs directly.
+
+**Noncompliant:**
+
+```csharp
+public Task<string> ReadFileAsync(string path)
+{
+    return Task.Run(() => File.ReadAllText(path));
+}
+```
+
+**Compliant:**
+
+```csharp
+public Task<string> ReadFileAsync(string path)
+{
+    return File.ReadAllTextAsync(path);
+}
+```
+
+### Summary of anti-patterns to avoid
+
+- `.Result` — blocks thread, deadlock risk
+- `.Wait()` — blocks thread, deadlock risk
+- `.GetAwaiter().GetResult()` — blocks thread, deadlock risk
+- `async void` — unhandled exceptions crash the process
+- `Task.Run(() => syncIO())` — wastes thread pool threads
+
+---
+
+## Locking
+
+### Synchronous Locking
+
+Use `lock` for simple thread synchronization in synchronous code. Prefer a dedicated private object to avoid deadlocks from external locking.
+
+On .NET 9 and later, prefer the `System.Threading.Lock` type over `object`.
+
+**Legacy (`object`):**
+
+```csharp
+public sealed class Counter
+{
+    private readonly object _syncRoot = new();
+    private int _value;
+
+    public int Increment()
+    {
+        lock (_syncRoot)
+        {
+            return ++_value;
+        }
+    }
+}
+```
+
+**Preferred (.NET 9+):**
+
+```csharp
+public sealed class Counter
+{
+    private readonly Lock _lockObject = new();
+    private int _value;
+
+    public int Increment()
+    {
+        lock (_lockObject)
+        {
+            return ++_value;
+        }
+    }
+}
+```
+
+### Asynchronous Locking
+
+Do not use `lock` inside `async` methods because the body may yield and resume on a different thread. Use `SemaphoreSlim` instead.
+
+**Noncompliant:**
+
+```csharp
+public sealed class AsyncCounter
+{
+    private readonly object _syncRoot = new();
+    private int _value;
+
+    public async Task<int> IncrementAsync()
+    {
+        lock (_syncRoot) // Compiler error in async method
+        {
+            await Task.Delay(10); // Cannot await inside lock
+            return ++_value;
+        }
+    }
+}
+```
+
+**Compliant:**
+
+```csharp
+public sealed class AsyncCounter : IAsyncDisposable
+{
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
+    private int _value;
+
+    public async Task<int> IncrementAsync()
+    {
+        await _semaphore.WaitAsync();
+        try
+        {
+            await Task.Delay(10);
+            return ++_value;
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _semaphore.Dispose();
+    }
+}
+```
+
+Guidelines:
+
+- Use `lock` for synchronous code only.
+- Use `SemaphoreSlim` with `WaitAsync` for async code.
+- Always release the semaphore in a `finally` block.
+- Dispose `SemaphoreSlim` when the owning object is disposed.
+- Consider `AsyncLock` abstractions only when they simplify complex coordination; otherwise prefer explicit `SemaphoreSlim`.
+
+---
+
+## Multi-Threading
+
+### Thread Pool
+
+Avoid creating threads manually. The thread pool manages thread lifecycle and avoids the overhead of thread creation and destruction.
+
+**Noncompliant:**
+
+```csharp
+public void Process()
+{
+    var thread = new Thread(() => DoWork());
+    thread.Start();
+}
+```
+
+**Compliant:**
+
+```csharp
+public Task ProcessAsync()
+{
+    return Task.Run(() => DoWork());
+}
+```
+
+### Concurrent Collections
+
+Prefer `System.Collections.Concurrent` for shared mutable state rather than manually synchronizing access to standard collections.
+
+```csharp
+public sealed class MessageQueue
+{
+    private readonly ConcurrentQueue<string> _queue = new();
+
+    public void Enqueue(string message)
+    {
+        _queue.Enqueue(message);
+    }
+
+    public bool TryDequeue(out string? message)
+    {
+        return _queue.TryDequeue(out message);
+    }
+}
+```
+
+### Interlocked
+
+Use `Interlocked` for simple atomic operations on shared variables rather than `lock`.
+
+```csharp
+public sealed class Counter
+{
+    private int _value;
+
+    public int Increment()
+    {
+        return Interlocked.Increment(ref _value);
+    }
+}
+```
+
+### `volatile` is not atomic
+
+`volatile` only guarantees visibility, not atomicity. Do not use it for compound operations.
+
+**Noncompliant:**
+
+```csharp
+private volatile int _counter;
+
+public void Increment()
+{
+    _counter++; // Not atomic
+}
+```
+
+**Compliant:**
+
+```csharp
+private int _counter;
+
+public void Increment()
+{
+    Interlocked.Increment(ref _counter);
+}
 ```
 
 ---
 
 ## Exceptions
 
-Exceptions are for exceptional situations.
+Exceptions are for exceptional situations only.
 
 Do not use exceptions for normal control flow.
 
-Prefer explicit result types for expected failures.
+**Noncompliant:**
+
+```csharp
+public void ProcessOrder(Guid orderId)
+{
+    try
+    {
+        var order = _repository.Get(orderId);
+        order.Process();
+    }
+    catch (OrderNotFoundException)
+    {
+        // Using exception for expected case
+        return;
+    }
+}
+```
+
+**Compliant:**
+
+```csharp
+public void ProcessOrder(Guid orderId)
+{
+    var order = _repository.Get(orderId);
+    if (order is null)
+    {
+        // Handle expected case explicitly
+        return;
+    }
+
+    order.Process();
+}
+```
+
+Prefer explicit result types for expected failures:
+
+```csharp
+public sealed record Result<T>
+{
+    public T? Value { get; init; }
+    public string? Error { get; init; }
+    public bool IsSuccess => Error is null;
+
+    public static Result<T> Success(T value) => new() { Value = value };
+    public static Result<T> Failure(string error) => new() { Error = error };
+}
+```
+
+### Use `ArgumentNullException.ThrowIfNull` for guard clauses
+
+Prefer built-in guard methods over manual null checks and custom exceptions.
+
+**Noncompliant:**
+
+```csharp
+public void ProcessOrder(Order order)
+{
+    if (order is null)
+    {
+        throw new ArgumentNullException(nameof(order));
+    }
+}
+```
+
+**Compliant:**
+
+```csharp
+public void ProcessOrder(Order order)
+{
+    ArgumentNullException.ThrowIfNull(order);
+}
+```
+
+### Do not catch generic exceptions unless re-throwing
+
+Catching `Exception` hides bugs and makes debugging difficult.
+
+**Noncompliant:**
+
+```csharp
+public void Process()
+{
+    try
+    {
+        DoWork();
+    }
+    catch (Exception)
+    {
+        // Swallows all exceptions silently
+    }
+}
+```
+
+**Compliant:**
+
+```csharp
+public void Process()
+{
+    try
+    {
+        DoWork();
+    }
+    catch (InvalidOperationException ex)
+    {
+        _logger.LogError(ex, "Processing failed");
+        throw;
+    }
+}
+```
+
+### Preserve stack traces when re-throwing
+
+Use `throw;` not `throw ex;` to preserve the original stack trace.
+
+**Noncompliant:**
+
+```csharp
+try
+{
+    DoWork();
+}
+catch (Exception ex)
+{
+    throw ex; // Loses original stack trace
+}
+```
+
+**Compliant:**
+
+```csharp
+try
+{
+    DoWork();
+}
+catch (Exception)
+{
+    throw; // Preserves original stack trace
+}
+```
+
+### Use `ExceptionDispatchInfo` for async exception propagation
+
+When capturing and re-throwing exceptions across async boundaries, preserve the original stack trace and Watson bucket information.
+
+```csharp
+public async Task ProcessAsync()
+{
+    ExceptionDispatchInfo? captured = null;
+    try
+    {
+        await DoWorkAsync();
+    }
+    catch (Exception ex)
+    {
+        captured = ExceptionDispatchInfo.Capture(ex);
+    }
+
+    // Later...
+    captured?.Throw();
+}
+```
+
 
 ---
 
 ## LINQ
 
-Use LINQ when it improves readability.
+Use LINQ when it improves readability over imperative loops.
 
-Avoid overly complex query chains.
+```csharp
+var activeUsers = users
+    .Where(u => u.IsActive)
+    .OrderBy(u => u.LastName)
+    .Select(u => new UserDto(u.Id, u.Email))
+    .ToList();
+```
 
-Break large queries into smaller named steps.
+Avoid overly complex query chains. When queries become difficult to read, break them into smaller named steps.
+
+**Noncompliant:**
+
+```csharp
+var result = orders
+    .Where(o => o.Status == OrderStatus.Completed)
+    .SelectMany(o => o.Items)
+    .Where(i => i.Price > 100)
+    .GroupBy(i => i.Category)
+    .Select(g => new { Category = g.Key, Total = g.Sum(i => i.Price), Count = g.Count() })
+    .Where(x => x.Total > 1000)
+    .OrderByDescending(x => x.Total)
+    .Take(10)
+    .ToList();
+```
+
+**Compliant:**
+
+```csharp
+var expensiveItems = orders
+    .Where(o => o.Status == OrderStatus.Completed)
+    .SelectMany(o => o.Items)
+    .Where(i => i.Price > 100);
+
+var categorySummaries = expensiveItems
+    .GroupBy(i => i.Category)
+    .Select(g => new CategorySummary(g.Key, g.Sum(i => i.Price), g.Count()));
+
+var topCategories = categorySummaries
+    .Where(x => x.Total > 1000)
+    .OrderByDescending(x => x.Total)
+    .Take(10)
+    .ToList();
+```
 
 ---
 
@@ -513,6 +1167,132 @@ Guidelines:
 
 ---
 
+# Value Objects
+
+Value objects are immutable objects defined by their attributes rather than identity. Two value objects with the same data are equal. Use them for concepts like money, addresses, and email values.
+
+```csharp
+public sealed record Money
+{
+    public required decimal Amount { get; init; }
+    public required string Currency { get; init; }
+
+    public Money Add(Money other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        if (Currency != other.Currency)
+        {
+            throw new InvalidOperationException("Cannot add money with different currencies.");
+        }
+
+        return this with { Amount = Amount + other.Amount };
+    }
+}
+```
+
+Guidelines:
+
+- Make value objects immutable.
+- Implement equality based on value, not reference.
+- Validate invariants in the constructor or factory method.
+- Use `record` types where possible.
+- Return new instances instead of mutating state.
+
+---
+
+# Service Lifetimes
+
+Prefer constructor injection and understand the implications of each lifetime.
+
+## Transient
+
+A new instance is created every time the service is requested.
+
+```csharp
+services.AddTransient<IEmailSender, SmtpEmailSender>();
+```
+
+Use for:
+- Stateless services
+- Lightweight services with no shared state
+- Services that are not thread-safe
+
+## Scoped
+
+One instance per request (or per scope).
+
+```csharp
+services.AddScoped<IOrderRepository, OrderRepository>();
+```
+
+Use for:
+- Entity Framework `DbContext`
+- Request-specific state
+- Services that should share state within a single request
+
+## Singleton
+
+One instance for the lifetime of the application.
+
+```csharp
+services.AddSingleton<ICacheService, MemoryCacheService>();
+```
+
+Use for:
+- Shared caches
+- Configuration readers
+- Thread-safe state that must persist across requests
+
+### Captive Dependencies
+
+Do not inject a service with a shorter lifetime into a service with a longer lifetime. This creates a captive dependency that lives longer than intended.
+
+**Noncompliant:**
+
+```csharp
+public sealed class CacheService : ICacheService // Singleton
+{
+    private readonly IOrderRepository _repository; // Scoped — captive!
+
+    public CacheService(IOrderRepository repository)
+    {
+        _repository = repository;
+    }
+}
+```
+
+**Compliant:**
+
+```csharp
+public sealed class CacheService : ICacheService // Singleton
+{
+    private readonly IServiceProvider _serviceProvider;
+
+    public CacheService(IServiceProvider serviceProvider)
+    {
+        _serviceProvider = serviceProvider;
+    }
+
+    public async Task WarmCacheAsync()
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<IOrderRepository>();
+        // Use repository within the scope
+    }
+}
+```
+
+Guidelines:
+
+- Prefer transient for stateless services.
+- Use scoped for `DbContext` and request-bound state.
+- Use singleton sparingly; ensure thread safety.
+- Never inject scoped services into singletons directly.
+- Resolve scoped services inside singletons by creating a scope.
+
+---
+
 # Architecture
 
 ## General
@@ -730,9 +1510,54 @@ when domain behaviour exists.
 
 ## Entities
 
-Entities should protect invariants.
+Entities should protect invariants through constructors and methods rather than allowing direct mutation of state.
 
-Avoid exposing mutable state unnecessarily.
+**Noncompliant:**
+
+```csharp
+public class Order
+{
+    public Guid Id { get; set; }
+    public OrderStatus Status { get; set; }
+    public List<OrderItem> Items { get; set; } = [];
+}
+```
+
+**Compliant:**
+
+```csharp
+public sealed class Order
+{
+    public Guid Id { get; private set; }
+    public OrderStatus Status { get; private set; }
+    public IReadOnlyCollection<OrderItem> Items => _items.AsReadOnly();
+    private readonly List<OrderItem> _items = [];
+
+    public Order(Guid id)
+    {
+        Id = id;
+        Status = OrderStatus.Pending;
+    }
+
+    public void AddItem(OrderItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        _items.Add(item);
+    }
+
+    public void Cancel()
+    {
+        if (Status == OrderStatus.Shipped)
+        {
+            throw new InvalidOperationException("Cannot cancel a shipped order.");
+        }
+
+        Status = OrderStatus.Cancelled;
+    }
+}
+```
+
+Avoid exposing mutable state unnecessarily. Prefer immutable or read-only properties for collections and value objects.
 
 ---
 
@@ -754,24 +1579,144 @@ Avoid coupling domain logic directly to infrastructure concerns.
 
 ## Retry Policies
 
+Apply transient fault handling at infrastructure boundaries. Use jittered exponential backoff to avoid thundering herd. Never retry indefinitely.
+
+```csharp
+public sealed class ResilientHttpClient
+{
+    private readonly HttpClient _client;
+    private readonly ILogger<ResilientHttpClient> _logger;
+
+    public ResilientHttpClient(HttpClient client, ILogger<ResilientHttpClient> logger)
+    {
+        _client = client;
+        _logger = logger;
+    }
+
+    public async Task<T?> GetAsync<T>(string url, CancellationToken ct = default)
+    {
+        var retryCount = 0;
+        const int maxRetries = 3;
+
+        while (true)
+        {
+            try
+            {
+                var response = await _client.GetAsync(url, ct);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadFromJsonAsync<T>(ct);
+            }
+            catch (HttpRequestException ex) when (retryCount < maxRetries)
+            {
+                retryCount++;
+                var delay = TimeSpan.FromSeconds(Math.Pow(2, retryCount))
+                    + TimeSpan.FromMilliseconds(Random.Shared.Next(0, 100));
+
+                _logger.LogWarning(ex,
+                    "Request to {Url} failed. Retry {RetryCount}/{MaxRetries} in {DelayMs}ms",
+                    url, retryCount, maxRetries, delay.TotalMilliseconds);
+
+                await Task.Delay(delay, ct);
+            }
+        }
+    }
+}
+```
+
+Guidelines:
+
 - Apply transient fault handling at infrastructure boundaries.
 - Use jittered exponential backoff for retries.
 - Avoid infinite retries; define a dead-letter mechanism.
+- Only retry idempotent operations.
 
 ## Circuit Breakers
 
+Use circuit breakers for synchronous HTTP calls to downstream services. Log state transitions (open, half-open, closed) for observability.
+
+```csharp
+public sealed class InventoryCircuitBreaker
+{
+    private readonly CircuitBreaker _breaker = new(
+        failureThreshold: 5,
+        recoveryTimeout: TimeSpan.FromSeconds(30));
+
+    public async Task<Result> CallAsync(Func<Task<Result>> operation)
+    {
+        if (_breaker.State == CircuitState.Open)
+        {
+            return Result.Failure("Circuit breaker is open; downstream service unavailable.");
+        }
+
+        try
+        {
+            var result = await operation();
+            _breaker.RecordSuccess();
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _breaker.RecordFailure();
+            throw;
+        }
+    }
+}
+```
+
+Guidelines:
+
 - Use circuit breakers for synchronous HTTP calls to downstream services.
 - Log state transitions (open, half-open, closed) for observability.
+- Provide a degraded or cached fallback when the circuit is open.
 
 ## Dead-Letter Queues
 
-- Failed messages after retries must move to a dead-letter queue.
-- Alert on dead-letter queue growth; do not silently drop failed events.
+Failed messages after retries must move to a dead-letter queue. Alert on dead-letter queue growth; do not silently drop failed events.
+
+```csharp
+public sealed class DeadLetterPublisher
+{
+    private readonly IMessageBroker _broker;
+    private readonly ILogger<DeadLetterPublisher> _logger;
+
+    public async Task PublishAsync(FailedMessage message, CancellationToken ct)
+    {
+        _logger.LogError(
+            "Moving message {MessageId} to dead-letter queue after {RetryCount} attempts. Error: {Error}",
+            message.MessageId, message.RetryCount, message.LastError);
+
+        await _broker.SendAsync("dead-letter-queue", message, ct);
+    }
+}
+```
 
 ## Timeouts
 
+Always specify timeouts for external calls. Default to fail-fast rather than hang indefinitely.
+
+```csharp
+public async Task<OrderDto?> GetOrderAsync(Guid orderId, CancellationToken ct)
+{
+    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+    try
+    {
+        return await _orderClient.GetOrderAsync(orderId, cts.Token);
+    }
+    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+    {
+        _logger.LogError("Order service call timed out for {OrderId}", orderId);
+        return null;
+    }
+}
+```
+
+Guidelines:
+
 - Always specify timeouts for external calls.
 - Default to fail-fast rather than hang indefinitely.
+- Distinguish between user-initiated cancellation and timeout cancellation.
 
 ---
 
@@ -813,6 +1758,34 @@ Responsibilities:
 - Persistence: data access.
 
 Avoid placing business logic directly inside endpoints.
+
+---
+
+## API Versioning
+
+Use URL path versioning or header versioning. Avoid query-string versioning for public APIs.
+
+Prefer:
+
+```csharp
+[Route("api/v{version:apiVersion}/[controller]")]
+[ApiController]
+public sealed class OrdersController : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<OrderDto>> GetOrder(Guid id)
+    {
+        // ...
+    }
+}
+```
+
+Guidelines:
+
+- Default to URL path versioning for clarity.
+- Include the API version in OpenAPI documentation.
+- Support at least one previous version with deprecation headers.
+- Avoid breaking changes; prefer additive evolution within a major version.
 
 ---
 
@@ -905,31 +1878,572 @@ public sealed record OrderCreatedEvent
 
 ---
 
+## Health Checks
+
+Add health checks for all external dependencies (databases, message brokers, downstream services).
+
+```csharp
+public sealed class DatabaseHealthCheck : IHealthCheck
+{
+    private readonly AppDbContext _context;
+
+    public DatabaseHealthCheck(AppDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            await _context.Database.ExecuteSqlRawAsync("SELECT 1", ct);
+            return HealthCheckResult.Healthy();
+        }
+        catch (Exception ex)
+        {
+            return HealthCheckResult.Unhealthy("Database connection failed", ex);
+        }
+    }
+}
+```
+
+Registration:
+
+```csharp
+services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("database")
+    .AddCheck<MessageBrokerHealthCheck>("message-broker");
+```
+
+Guidelines:
+
+- Distinguish between liveness and readiness probes.
+- Do not expose sensitive health check details publicly.
+- Health checks should be lightweight and non-blocking.
+- Return `503 Service Unavailable` when any critical dependency is unhealthy.
+
+---
+
+## Background Jobs
+
+Use `IHostedService` or `BackgroundService` for recurring or long-running background tasks.
+
+```csharp
+public sealed class OutboxProcessor : BackgroundService
+{
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<OutboxProcessor> _logger;
+
+    public OutboxProcessor(
+        IServiceProvider serviceProvider,
+        ILogger<OutboxProcessor> logger)
+    {
+        _serviceProvider = serviceProvider;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var publisher = scope.ServiceProvider
+                    .GetRequiredService<IOutboxPublisher>();
+
+                await publisher.ProcessAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Outbox processing failed");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        }
+    }
+}
+```
+
+Guidelines:
+
+- Always respect `CancellationToken` for graceful shutdown.
+- Use `IServiceProvider.CreateScope()` when scoped services are needed in background services.
+- Catch and log exceptions inside loops; never let background tasks crash silently.
+- Prefer dedicated job schedulers (e.g., Hangfire, Quartz) for complex scheduling needs.
+
+---
+
+# Worker Services
+
+Worker services are headless, non-HTTP applications designed for long-running background processing, scheduled tasks, event consumers, and message-driven workflows. They run independently of any web API and are deployed as separate processes.
+
+## When to Use a Worker Service
+
+Use a worker service when the application must:
+
+- Consume events or messages from a broker (e.g., RabbitMQ, Kafka, Azure Service Bus).
+- Run scheduled or periodic background tasks (e.g., nightly reports, data cleanup).
+- Perform long-running processing pipelines (e.g., ETL, file ingestion, ML inference).
+- Operate as a saga orchestrator or process manager in an event-driven system.
+
+**Prefer a worker service over a web API** when there is no requirement for HTTP endpoints or real-time request/response interaction.
+
+## Project Setup
+
+Create the project using the Worker template:
+
+```bash
+dotnet new worker -n ArbitrageIQ.Trading.WorkerService.OrderProcessing
+```
+
+This generates a `Program.cs` that calls `IHostBuilder` and registers the default worker:
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddHostedService<OrderProcessingWorker>();
+
+var host = builder.Build();
+host.Run();
+```
+
+## Worker Implementation
+
+Derive from `BackgroundService` and implement `ExecuteAsync`. Always respect the `CancellationToken` for graceful shutdown.
+
+```csharp
+public sealed class OrderProcessingWorker : BackgroundService
+{
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<OrderProcessingWorker> _logger;
+
+    public OrderProcessingWorker(
+        IServiceProvider serviceProvider,
+        ILogger<OrderProcessingWorker> logger)
+    {
+        _serviceProvider = serviceProvider;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var processor = scope.ServiceProvider
+                    .GetRequiredService<IOrderProcessor>();
+
+                await processor.ProcessNextAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Order processing failed");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        }
+    }
+}
+```
+
+### Worker Service DI
+
+Worker services use the same `IServiceCollection` registration model as web APIs. Group registrations using extension methods.
+
+```csharp
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure();
+builder.Services.AddPersistence();
+builder.Services.AddHostedService<OrderProcessingWorker>();
+```
+
+Guidelines:
+
+- Use `IServiceProvider.CreateScope()` when scoped services are needed inside the worker loop.
+- Never let unhandled exceptions crash the worker process; catch and log inside `ExecuteAsync`.
+- Keep worker classes focused on scheduling and lifecycle concerns.
+- Offload business logic to application-layer services.
+
+## Naming Conventions
+
+Worker services follow the same conventions as standard services but use `.WorkerService.` (or `worker-service-`) in place of `.Service.` (or `service-`).
+
+**Assembly:**
+
+```csharp
+ArbitrageIQ.Trading.WorkerService.OrderProcessing
+```
+
+**Repository:**
+
+```text
+trading-worker-service-order-processing
+```
+
+**Namespace:**
+
+```csharp
+namespace ArbitrageIQ.Trading.WorkerService.OrderProcessing.Domain;
+```
+
+**Service Identifier:**
+
+```csharp
+public static class ServiceDefaults
+{
+    public const string Name = "order-processing-worker-service";
+}
+```
+
+## Worker in an ASP.NET Application
+
+A worker can run inside an existing ASP.NET Core web application by registering it alongside controllers or minimal APIs. This is useful when a service must expose both HTTP endpoints and background processing.
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddHostedService<OutboxProcessor>();
+
+var app = builder.Build();
+app.MapControllers();
+app.Run();
+```
+
+Guidelines:
+
+- Only co-locate a worker with a web API when the background work is tightly coupled to the same bounded context.
+- Prefer separate worker service projects for heavy background workloads to allow independent scaling and deployment.
+- Ensure workers do not compete with HTTP request threads for CPU or memory; use resource limits or separate pods in containerised environments.
+
+---
+
+# Caching
+
+Prefer `IMemoryCache` for short-lived, per-process caches. Use `IDistributedCache` for multi-node environments.
+
+```csharp
+public sealed class CachedProductRepository : IProductRepository
+{
+    private readonly IProductRepository _inner;
+    private readonly IMemoryCache _cache;
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+
+    public CachedProductRepository(IProductRepository inner, IMemoryCache cache)
+    {
+        _inner = inner;
+        _cache = cache;
+    }
+
+    public async Task<Product?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        var cacheKey = $"product:{id}";
+
+        if (_cache.TryGetValue(cacheKey, out Product? cached))
+        {
+            return cached;
+        }
+
+        var product = await _inner.GetByIdAsync(id, ct);
+        if (product is not null)
+        {
+            _cache.Set(cacheKey, product, CacheDuration);
+        }
+
+        return product;
+    }
+}
+```
+
+Guidelines:
+
+- Treat cache as a performance layer, not a source of truth.
+- Use deterministic cache keys based on identifiers.
+- Always fall back to the underlying data source on cache miss.
+- Set explicit expiration (absolute or sliding) to avoid stale data.
+- Invalidate cache on data mutations.
+
+### FusionCache
+
+For advanced caching scenarios, consider using [FusionCache](https://github.com/ZiggyCreatures/FusionCache) as a higher-level abstraction over `IMemoryCache` and `IDistributedCache`. It provides a multi-level cache with built-in cache stampede protection, auto-recovery, and circuit breaker patterns.
+
+Registration with Redis backplane for multi-node environments:
+
+```csharp
+builder.Services.AddFusionCache()
+    .WithDefaultEntryOptions(new FusionCacheEntryOptions
+    {
+        Duration = TimeSpan.FromMinutes(5),
+        IsFailSafeEnabled = true,
+        FactorySoftTimeout = TimeSpan.FromMilliseconds(100),
+        FactoryHardTimeout = TimeSpan.FromSeconds(1)
+    })
+    .WithDistributedCache(
+        new RedisCache(new RedisCacheOptions
+        {
+            Configuration = builder.Configuration.GetConnectionString("Redis")
+        }))
+    .WithBackplane(
+        new RedisBackplane(new RedisBackplaneOptions
+        {
+            Configuration = builder.Configuration.GetConnectionString("Redis")
+        }));
+```
+
+Usage:
+
+```csharp
+public sealed class CachedProductRepository : IProductRepository
+{
+    private readonly IProductRepository _inner;
+    private readonly IFusionCache _cache;
+
+    public CachedProductRepository(IProductRepository inner, IFusionCache cache)
+    {
+        _inner = inner;
+        _cache = cache;
+    }
+
+    public async Task<Product?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        return await _cache.GetOrSetAsync<Product?>(
+            $"product:{id}",
+            async token => await _inner.GetByIdAsync(id, token),
+            token: ct);
+    }
+}
+```
+
+Guidelines:
+
+- Use `GetOrSetAsync` to prevent cache stampede.
+- Enable fail-safe to return stale data during downstream outages.
+- Configure soft/hard timeouts to prevent slow factories from blocking callers.
+- Use Redis backplane to synchronize invalidation across nodes in multi-instance deployments.
+- Always configure distributed cache when using backplane.
+
+---
+
+# Rate Limiting
+
+Use ASP.NET Core rate limiting to protect endpoints from abuse and ensure fair resource usage.
+
+Registration:
+
+```csharp
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("api", opt =>
+    {
+        opt.PermitLimit = 100;
+        opt.Window = TimeSpan.FromMinutes(1);
+    });
+});
+
+app.UseRateLimiter();
+```
+
+Usage:
+
+```csharp
+[EnableRateLimiting("api")]
+public sealed class OrdersController : ControllerBase
+{
+    // ...
+}
+```
+
+Guidelines:
+
+- Apply rate limiting at the edge or API gateway when possible.
+- Use distinct policies for public APIs, authenticated APIs, and admin APIs.
+- Return `429 Too Many Requests` with a `Retry-After` header.
+- Log rate limit violations for security monitoring.
+
+---
+
+# OpenAPI
+
+Generate OpenAPI documentation automatically from controllers and minimal APIs. Use attributes or extension methods to enrich schemas.
+
+```csharp
+app.MapPost("/orders", CreateOrderHandler.HandleAsync)
+    .WithName("CreateOrder")
+    .WithOpenApi(operation =>
+    {
+        operation.Summary = "Create a new order";
+        operation.Description = "Creates an order for a customer.";
+        return operation;
+    });
+```
+
+Guidelines:
+
+- Keep OpenAPI descriptions in sync with endpoint behaviour.
+- Use `[ProducesResponseType]` on controllers for accurate status code documentation.
+- Group endpoints by tag for logical organisation in Swagger UI.
+- Exclude internal or health-check endpoints from public documentation.
+
+---
+
+# Feature Flags
+
+Use feature flags to decouple deployment from release. Prefer a typed, strongly flagged approach rather than raw string checks.
+
+```csharp
+public sealed class FeatureFlags
+{
+    public const string NewCheckoutFlow = "NewCheckoutFlow";
+    public const string BetaReporting = "BetaReporting";
+}
+```
+
+Usage:
+
+```csharp
+public async Task<IActionResult> Checkout(CheckoutRequest request)
+{
+    if (await _featureManager.IsEnabledAsync(FeatureFlags.NewCheckoutFlow))
+    {
+        return await _newCheckoutService.ProcessAsync(request);
+    }
+
+    return await _legacyCheckoutService.ProcessAsync(request);
+}
+```
+
+Guidelines:
+
+- Use feature flags for gradual rollouts, A/B testing, and emergency toggles.
+- Keep the flag surface small; remove flags once a feature is fully stable.
+- Evaluate flags at the application layer, not inside domain logic.
+- Use short-lived flags to avoid permanent technical debt.
+
+---
+
+# CQRS
+
+Separate commands (writes) from queries (reads) using distinct models and handlers. This keeps read and write concerns independent and optimisable.
+
+Command:
+
+```csharp
+public sealed record CreateOrderCommand(
+    Guid CustomerId,
+    List<OrderItem> Items);
+
+public sealed class CreateOrderHandler(
+    IOrderRepository repository,
+    IEventPublisher publisher)
+{
+    public async Task<Result<Guid>> HandleAsync(
+        CreateOrderCommand command,
+        CancellationToken ct = default)
+    {
+        var order = Order.Create(command.CustomerId, command.Items);
+        await repository.SaveAsync(order, ct);
+        await publisher.PublishAsync(new OrderCreatedEvent(order.Id), ct);
+        return Result<Guid>.Success(order.Id);
+    }
+}
+```
+
+Query:
+
+```csharp
+public sealed record GetOrderQuery(Guid OrderId);
+
+public sealed class GetOrderHandler(IReadOnlyOrderRepository repository)
+{
+    public async Task<OrderDto?> HandleAsync(GetOrderQuery query, CancellationToken ct = default)
+    {
+        return await repository.GetByIdAsync(query.OrderId, ct);
+    }
+}
+```
+
+Guidelines:
+
+- Commands must not return domain models; return IDs, results, or void.
+- Queries should be simple projections tailored to the consumer.
+- Avoid sharing models between commands and queries.
+- Keep handlers focused on a single operation.
+- Use separate repositories for read and write paths when read models diverge from domain models.
+
+---
+
 # Persistence Standards
 
 ## Entity Framework Core
 
 Entity Framework Core is the default ORM.
 
-Prefer Fluent API configuration.
+Prefer Fluent API configuration to keep entities clean of persistence concerns.
 
-Keep entity configuration separate from entities.
+Keep entity configuration separate from entities in dedicated configuration classes.
 
-Prefer using compiled queries
+**Prefer:**
 
-Prefer:
+```csharp
+public sealed class OrderConfiguration : IEntityTypeConfiguration<Order>
+{
+    public void Configure(EntityTypeBuilder<Order> builder)
+    {
+        builder.HasKey(o => o.Id);
+        builder.Property(o => o.Status)
+            .HasConversion<string>()
+            .HasMaxLength(50);
+        builder.HasMany(o => o.Items)
+            .WithOne()
+            .HasForeignKey(i => i.OrderId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+```
+
+**Avoid:**
+
+```csharp
+public class Order
+{
+    [Key]
+    public Guid Id { get; set; }
+
+    [Required]
+    [MaxLength(50)]
+    public string Status { get; set; } = string.Empty;
+}
+```
+
+Prefer using compiled queries for frequently executed queries with static shapes:
+
+```csharp
+private static readonly Func<AppDbContext, Guid, Order?> GetOrderById =
+    EF.CompileQuery((AppDbContext context, Guid orderId) =>
+        context.Orders
+            .AsNoTracking()
+            .FirstOrDefault(o => o.Id == orderId));
+```
+
+Preferred folder structure:
 
 ```text
 Persistence/
 ├── Configurations/
 ├── Interceptors/
 ├── Migrations/
-└── Contexts/
-└── Factories/
+├── Contexts/
+├── Factories/
 └── Seed/
 ```
 
-Avoid excessive data annotations.
+Avoid excessive data annotations. Use Fluent API for all non-trivial configuration.
 
 ---
 
@@ -966,7 +2480,147 @@ CreateUser_Should_ReturnUser_When_RequestIsValid
 
 Test behaviour rather than implementation details.
 
-Prefer testing public behaviour over private implementation.
+**Noncompliant:**
+
+```csharp
+[Test]
+public void ProcessOrder_CallsRepositorySave()
+{
+    var mockRepo = new Mock<IOrderRepository>();
+    var service = new OrderService(mockRepo.Object);
+
+    service.ProcessOrder(Guid.NewGuid());
+
+    mockRepo.Verify(r => r.Save(It.IsAny<Order>()), Times.Once);
+}
+```
+
+**Compliant:**
+
+```csharp
+[Test]
+public void ProcessOrder_Should_MarkOrderAsProcessed_When_OrderIsPending()
+{
+    var order = new Order(Guid.NewGuid());
+    var service = new OrderService(new InMemoryOrderRepository());
+
+    var result = service.ProcessOrder(order.Id);
+
+    result.Status.Should().Be(OrderStatus.Processed);
+}
+```
+
+Prefer testing public behaviour over private implementation. Tests should remain stable when internal refactoring occurs.
+
+## Test Structure
+
+### Arrange, Act, Assert
+
+Structure every test in three distinct phases separated by a blank line.
+
+- **Arrange** — set up dependencies, test data, and the system under test.
+- **Act** — invoke the single operation being tested.
+- **Assert** — verify the expected outcome.
+
+```csharp
+[Test]
+public void CreateUser_Should_ReturnUser_When_RequestIsValid()
+{
+    // Arrange
+    var request = new CreateUserRequest("test@example.com", "SecureP@ss123");
+    var sut = new UserService(new InMemoryUserRepository());
+
+    // Act
+    var result = sut.CreateUser(request);
+
+    // Assert
+    result.Should().NotBeNull();
+    result.Email.Should().Be("test@example.com");
+}
+```
+
+### System Under Test
+
+Name the variable holding the class being tested `sut`. This makes the target of the test immediately obvious.
+
+```csharp
+[Test]
+public void CancelOrder_Should_SetStatusToCancelled_When_OrderIsPending()
+{
+    var order = new Order(Guid.NewGuid());
+    var sut = new OrderService(new InMemoryOrderRepository());
+
+    sut.Cancel(order.Id);
+
+    order.Status.Should().Be(OrderStatus.Cancelled);
+}
+```
+
+## Unit Testing
+
+- Test one concern per test.
+- Use factory methods or builders for test data setup.
+- Avoid shared mutable state between tests.
+- Mock external dependencies at service boundaries only.
+
+```csharp
+public static class TestData
+{
+    public static User CreateUser(string email = "test@example.com")
+    {
+        return new User(Guid.NewGuid(), email);
+    }
+}
+```
+
+### Reusable Mock Objects
+
+Prefer creating typed mock classes over inline `Mock<T>` setup. This centralises mock configuration and keeps tests readable.
+
+```csharp
+public interface IMockBase<T> where T : class
+{
+    T Mock();
+}
+```
+
+```csharp
+public class BusMock : Mock<IBus>, IMockBase<BusMock>
+{
+    public BusMock()
+    {
+        Setup(m => m.PublishAsync(It.IsAny<IEvent>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+    }
+
+    public BusMock Mock()
+    {
+        return this;
+    }
+}
+```
+
+Usage in tests:
+
+```csharp
+[Test]
+public async Task ProcessOrder_Should_PublishEvent_When_OrderIsCreated()
+{
+    var bus = new BusMock().Mock();
+    var service = new OrderService(bus.Object);
+
+    await service.CreateOrderAsync(new CreateOrderRequest());
+
+    bus.Verify(m => m.PublishAsync(It.Is<OrderCreatedEvent>(), It.IsAny<CancellationToken>()), Times.Once);
+}
+```
+
+Guidelines:
+
+- Derive from `Mock<T>` and implement `IMockBase<T>` for consistent setup patterns.
+- Configure default behaviours in the mock constructor.
+- Expose the mock object via `Object` for injection into the service under test.
+- Keep mock classes focused on a single dependency.
 
 ## Integration Testing
 
@@ -985,12 +2639,63 @@ Prefer testing public behaviour over private implementation.
 - Prefer least-privilege access.
 - Use framework-provided authentication and authorization features.
 
+## Input Validation
+
+Always validate and sanitize input at service boundaries.
+
+```csharp
+public sealed class CreateUserRequestValidator : AbstractValidator<CreateUserRequest>
+{
+    public CreateUserRequestValidator()
+    {
+        RuleFor(x => x.Email)
+            .NotEmpty()
+            .EmailAddress()
+            .MaximumLength(ValidationLimits.MaxEmailLength);
+
+        RuleFor(x => x.Password)
+            .NotEmpty()
+            .MinimumLength(12);
+    }
+}
+```
+
+## Secrets Management
+
+Never hardcode secrets. Use the options pattern with environment-specific configuration.
+
+```csharp
+public sealed class DatabaseOptions
+{
+    public required string ConnectionString { get; init; }
+}
+
+public sealed class ConfigureDatabaseOptions : IConfigureOptions<DatabaseOptions>
+{
+    public void Configure(DatabaseOptions options)
+    {
+        // Bind from configuration; actual value comes from environment variables or secret stores
+    }
+}
+```
+
 ## Inter-Service Security
 
 - Authenticate and authorize service-to-service communication.
 - Prefer mTLS or signed JWTs for service identities.
 - Never trust events from external services without validation.
 - Sanitize all data from integration events before processing.
+
+```csharp
+public sealed class IntegrationEventValidator<T> : IEventValidator<T> where T : IIntegrationEvent
+{
+    public ValidationResult Validate(T @event)
+    {
+        // Validate event schema, signature, and required fields
+        // Reject events that do not conform to the expected contract
+    }
+}
+```
 
 ---
 
@@ -4619,3 +6324,7 @@ When generating code:
 13. Ensure generated code complies with all SonarQube rules defined in this document.
 14. Do not generate code that triggers SonarQube bugs, vulnerabilities, or critical code smells.
 15. Apply security hotspot guidance for any security-sensitive operations (cryptography, serialization, networking, logging).
+
+## Rationale
+
+These instructions exist to maintain consistency, reduce complexity, and prevent common pitfalls in C# and ASP.NET Core development. Agents should treat this document as a binding contract. When in doubt, prefer the simpler, more explicit option that aligns with the standards above.
