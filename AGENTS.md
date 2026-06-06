@@ -73,6 +73,13 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [Distributed Tracing](#distributed-tracing)
   - [Metrics & OpenTelemetry](#metrics--opentelemetry)
   - [Persistence Guidelines](#persistence-guidelines)
+    - [DTO Projections via Select()](#dto-projections-via-select)
+    - [AsNoTracking() for Read-Only Queries](#asnotracking-for-read-only-queries)
+    - [Avoiding N+1 Queries](#avoiding-n1-queries)
+    - [Migrations Strategy](#migrations-strategy)
+    - [IEntityTypeConfiguration over OnModelCreating](#ientitytypeconfiguration-over-onmodelcreating)
+    - [Owned Entities, Complex Types, and Value Objects](#owned-entities-complex-types-and-value-objects)
+    - [Avoid Loading Large Graphs Unnecessarily](#avoid-loading-large-graphs-unnecessarily)
   - [Testing Standards](#testing-standards)
     - [Unit Testing](#unit-testing)
     - [Integration Testing](#integration-testing)
@@ -4288,6 +4295,268 @@ Guidelines:
 - Use compiled models for large models or cold-start-sensitive applications.
 - Regenerate compiled models after any model or configuration change.
 - Do not use compiled models during active development; enable for production builds.
+
+### DTO Projections via `Select()`
+
+Prefer projecting directly to DTOs using `Select()` over fetching full entities with `Include()` for read-only queries. This reduces data transfer, memory usage, and tracking overhead by querying only the columns the consumer needs.
+
+**Noncompliant:**
+
+```csharp
+public async Task<List<OrderDto>> GetOrdersAsync(CancellationToken ct = default)
+{
+    var orders = await _context.Orders
+        .AsNoTracking()
+        .Include(o => o.Customer)
+        .Include(o => o.Items)
+        .ThenInclude(i => i.Product)
+        .ToListAsync(ct);
+
+    return orders.Select(o => new OrderDto(
+        o.Id,
+        o.Customer.Name,
+        o.Items.Select(i => i.Product.Name).ToList())).ToList();
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task<List<OrderDto>> GetOrdersAsync(CancellationToken ct = default)
+{
+    return await _context.Orders
+        .AsNoTracking()
+        .Select(o => new OrderDto(
+            o.Id,
+            o.Customer.Name,
+            o.Items.Select(i => i.Product.Name).ToList()))
+        .ToListAsync(ct);
+}
+```
+
+Guidelines:
+
+- Use `Select()` to shape data at the database level whenever possible.
+- Avoid `Include()` chains in read queries when the final output is a DTO.
+- Project only the fields required by the consumer.
+
+### `AsNoTracking()` for Read-Only Queries
+
+Use `AsNoTracking()` for all queries that do not modify entities. This avoids the overhead of change tracking and identity resolution, improving performance and reducing memory pressure.
+
+**Noncompliant:**
+
+```csharp
+public async Task<List<Order>> GetOrdersAsync(CancellationToken ct = default)
+{
+    return await _context.Orders.ToListAsync(ct);
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task<List<OrderDto>> GetOrdersAsync(CancellationToken ct = default)
+{
+    return await _context.Orders
+        .AsNoTracking()
+        .Select(o => new OrderDto(o.Id, o.Status))
+        .ToListAsync(ct);
+}
+```
+
+Guidelines:
+
+- Use `AsNoTracking()` for all read-only queries.
+- Combine with `Select()` projections for maximum efficiency.
+- Do not use `AsNoTracking()` when you intend to update the fetched entities.
+
+### Avoiding N+1 Queries
+
+N+1 queries occur when an initial query loads parent entities, and subsequent lazy-loaded queries execute for each related entity inside a loop. Prevent this by using eager loading or, preferably, projecting with `Select()`.
+
+**Noncompliant:**
+
+```csharp
+public async Task<List<OrderDto>> GetOrdersAsync(CancellationToken ct = default)
+{
+    var orders = await _context.Orders.ToListAsync(ct);
+
+    foreach (var order in orders)
+    {
+        // Executes a separate query for each order
+        Console.WriteLine(order.Customer.Name);
+    }
+
+    return orders.Select(o => new OrderDto(o.Id, o.Customer.Name)).ToList();
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task<List<OrderDto>> GetOrdersAsync(CancellationToken ct = default)
+{
+    return await _context.Orders
+        .AsNoTracking()
+        .Select(o => new OrderDto(o.Id, o.Customer.Name))
+        .ToListAsync(ct);
+}
+```
+
+Guidelines:
+
+- Do not rely on lazy loading in loops or service-layer logic.
+- Prefer `Select()` projections that join and shape data in a single query.
+- Use `Include()` only when you genuinely need full entity graphs, and always review generated SQL.
+
+### Migrations Strategy
+
+Use a code-first approach with EF Core migrations. Never manually edit the database schema outside of migrations, and never modify generated migration files to include raw SQL that alters schema unless strictly necessary for data seeding or complex index creation.
+
+Guidelines:
+
+- Generate migrations via `dotnet ef migrations add`.
+- Review generated migrations before applying them.
+- Use `dotnet ef database update` to apply migrations; never run manual `ALTER TABLE` scripts in production.
+- Keep migrations small and focused; split large refactors into multiple migrations.
+- Do not modify model snapshots or designer files manually.
+- Use `EnsureCreated()` only in integration tests; never in production.
+
+### IEntityTypeConfiguration over OnModelCreating
+
+Register entity configurations via `IEntityTypeConfiguration<T>` classes and apply them in `OnModelCreating` using `ApplyConfigurationsFromAssembly`. This keeps configuration co-located with the entity and prevents `OnModelCreating` from becoming a monolithic method.
+
+**Compliant:**
+
+```csharp
+public sealed class OrderConfiguration : IEntityTypeConfiguration<Order>
+{
+    public void Configure(EntityTypeBuilder<Order> builder)
+    {
+        builder.HasKey(o => o.Id);
+        builder.Property(o => o.Status)
+            .HasConversion<string>()
+            .HasMaxLength(50);
+        builder.HasMany(o => o.Items)
+            .WithOne()
+            .HasForeignKey(i => i.OrderId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+```
+
+Registration:
+
+```csharp
+public sealed class AppDbContext : DbContext
+{
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+    }
+}
+```
+
+Guidelines:
+
+- Create one configuration class per entity.
+- Group configurations by entity in the `Persistence/Configurations` folder.
+- Avoid putting configuration logic directly in `OnModelCreating`.
+
+### Owned Entities, Complex Types, and Value Objects
+
+EF Core provides owned entities and complex types to model value objects that do not have their own identity. Use these for concepts like addresses, money, or contact details that are intrinsically part of an aggregate root.
+
+**Complex Types (EF Core 8+):**
+
+```csharp
+public sealed record Money
+{
+    public required decimal Amount { get; init; }
+    public required string Currency { get; init; }
+}
+
+public sealed class OrderConfiguration : IEntityTypeConfiguration<Order>
+{
+    public void Configure(EntityTypeBuilder<Order> builder)
+    {
+        builder.ComplexProperty(o => o.Total, total =>
+        {
+            total.Property(t => t.Amount).HasColumnName("TotalAmount");
+            total.Property(t => t.Currency).HasColumnName("TotalCurrency");
+        });
+    }
+}
+```
+
+**Owned Entities:**
+
+```csharp
+public sealed class OrderConfiguration : IEntityTypeConfiguration<Order>
+{
+    public void Configure(EntityTypeBuilder<Order> builder)
+    {
+        builder.OwnsOne(o => o.ShippingAddress, address =>
+        {
+            address.Property(a => a.Street).HasColumnName("ShippingStreet");
+            address.Property(a => a.City).HasColumnName("ShippingCity");
+        });
+    }
+}
+```
+
+Guidelines:
+
+- Use **complex types** when the value object is immutable and never shared between aggregates. Complex types do not require a separate key and map columns directly into the owning table.
+- Use **owned entities** when the value object contains collections or requires relationship semantics, or when you may later need to transition it to a standalone entity.
+- Prefer C# `record` types for value objects to enforce immutability and value-based equality.
+- Never expose owned entity or complex type collections as mutable lists; use `IReadOnlyCollection<T>`.
+- Do not query owned entities independently; they are always accessed through the aggregate root.
+
+### Avoid Loading Large Graphs Unnecessarily
+
+Fetching large entity graphs with multiple `Include()` and `ThenInclude()` calls is a common source of performance degradation. It increases memory usage, tracking overhead, and the risk of Cartesian explosion from SQL joins.
+
+**Noncompliant:**
+
+```csharp
+public async Task<Order?> GetOrderAsync(Guid id, CancellationToken ct = default)
+{
+    return await _context.Orders
+        .Include(o => o.Customer)
+        .ThenInclude(c => c.Address)
+        .Include(o => o.Items)
+        .ThenInclude(i => i.Product)
+        .ThenInclude(p => p.Supplier)
+        .Include(o => o.Notes)
+        .Include(o => o.AuditLog)
+        .FirstOrDefaultAsync(o => o.Id == id, ct);
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task<OrderDto?> GetOrderAsync(Guid id, CancellationToken ct = default)
+{
+    return await _context.Orders
+        .AsNoTracking()
+        .Where(o => o.Id == id)
+        .Select(o => new OrderDto(
+            o.Id,
+            new CustomerSummary(o.Customer.Name, o.Customer.Email),
+            o.Items.Select(i => new OrderItemDto(i.Product.Name, i.Quantity, i.UnitPrice)).ToList()))
+        .FirstOrDefaultAsync(ct);
+}
+```
+
+Guidelines:
+
+- Avoid deep `Include()` chains; they load far more data than necessary.
+- Use `Select()` to fetch only the fields required for the DTO.
+- If multiple related collections are genuinely needed, consider `AsSplitQuery()` as a tactical fallback, but prefer projection.
+- Keep query shapes simple; offload complex aggregation to raw SQL or dedicated read models when necessary.
 
 ---
 
