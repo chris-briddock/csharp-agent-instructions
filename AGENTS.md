@@ -187,11 +187,13 @@ Use _camelCase for private fields.
 private readonly ILogger<UserService> _logger;
 ```
 
+Prefer fields when you are defining constants and static readonly values, also for domain collections and private internal implementation details.
+
 ### Parameters and Locals
 
 Use camelCase.
 
-Prefer fields when you are defining constants and static readonly values, also for domain collections and private internal implementation details.
+
 
 ---
 
@@ -318,13 +320,100 @@ List<string> names = [];
 
 ### Pattern Matching
 
-Prefer modern pattern matching.
+Use pattern matching to express type checks, property conditions, and value tests declaratively.
 
 ```csharp
-if (user is null)
+if (item is Order order)
 {
+    order.Process();
+}
+
+return order is { Total: > 1000, Items.Count: > 5 };
+
+return (order.CustomerType, order.Total) switch
+{
+    (CustomerType.VIP, > 1000) => order.Total * 0.20m,
+    (CustomerType.VIP, _) => order.Total * 0.10m,
+    _ => 0
+};
+```
+
+Guidelines:
+
+- Prefer `switch` expressions over `switch` statements for exhaustive branching.
+- Use property patterns (`{ Property: Value }`) to reduce nested property access.
+- Use relational patterns (`> 100`, `< 50`) inside patterns rather than combining `&&`.
+- Use `not`, `and`, and `or` combinators for clarity.
+- Avoid overly complex nested patterns; break them into named steps if cognitive complexity rises.
+
+---
+
+### Tuples and Deconstruction
+
+Use tuples for lightweight grouping of related values without introducing a dedicated type.
+
+```csharp
+public (bool success, Guid orderId, string? error) TryParseOrderId(string input)
+{
+    return (true, orderId, null);
+}
+
+var (success, orderId, error) = TryParseOrderId(input);
+var (total, customerType, _) = order;
+```
+
+Guidelines:
+
+- Use tuples instead of `out` parameters when a method logically returns multiple values.
+- Name tuple elements explicitly; do not rely on `Item1`, `Item2`.
+- Use deconstruction at the declaration site when all tuple elements are needed immediately.
+- Use discards (`_`) for tuple elements that are not needed.
+- Do not use tuples for complex domain concepts; prefer records when the grouping is reused or meaningful.
+
+---
+
+### Index and Range
+
+Use `Index` (`^`) and `Range` (`..`) operators for concise, readable access to the end or slices of collections.
+
+```csharp
+return items is [] ? string.Empty : items[^1];
+return items[..Math.Min(5, items.Length)];
+```
+
+Guidelines:
+
+- Use `[^1]` instead of `[collection.Length - 1]` for the last element.
+- Use `[..n]` for the first `n` elements and `[n..]` for elements from index `n` onward.
+- Combine ranges: `[2..^1]` for elements from index 2 to the second-to-last.
+- Prefer `Span<T>` or `ReadOnlySpan<T>` when slicing to avoid allocations.
+
+---
+
+### Local Functions
+
+Use local functions to keep helper logic scoped to the method that needs it, reducing class-level clutter and improving cohesion.
+
+```csharp
+public void Process(Order order)
+{
+    if (!IsValid(order))
+    {
+        throw new ArgumentException("Invalid order");
+    }
+
+    static bool IsValid(Order o) =>
+        o is not null && o.Status == OrderStatus.Pending;
 }
 ```
+
+Guidelines:
+
+- Use local functions when a helper is only relevant inside a single enclosing method.
+- Mark local functions `static` if they do not capture variables from the enclosing scope.
+- Keep local functions small and focused; extract to a private method if they grow beyond a few lines.
+- Do not use local functions for logic that is reused across multiple methods.
+- Place local functions at the end of the enclosing method to keep the main logic readable from top to bottom.
 
 ### AsyncLocal
 
@@ -522,6 +611,30 @@ public Task<string> ReadFileAsync(string path)
     return File.ReadAllTextAsync(path);
 }
 ```
+
+### Prefer `ValueTask` for hot paths
+
+`ValueTask` and `ValueTask<T>` reduce allocations for operations that are frequently synchronous. Use them when a method is expected to complete synchronously in the common case.
+
+```csharp
+public ValueTask<int> GetCachedCountAsync()
+{
+    if (_cache.TryGetValue("count", out var count))
+    {
+        return new ValueTask<int>(count);
+    }
+
+    return new ValueTask<int>(FetchCountAsync());
+}
+```
+
+Guidelines:
+
+- Use `ValueTask<T>` instead of `Task<T>` when profiling shows a measurable allocation improvement and the synchronous path is common.
+- Do not `await` a `ValueTask` more than once; it may represent a pooled or one-shot operation.
+- Do not call `.AsTask()` and then `await` it multiple times; consume it once.
+- Return `ValueTask` directly when the method has only one asynchronous consumer and no post-processing.
+- Use `Task`/`Task<T>` when the result is consumed multiple times, stored in collections, or passed around.
 
 #### Summary of anti-patterns to avoid
 
@@ -1692,6 +1805,48 @@ public sealed class ConfigureProblemDetailsOptions : IConfigureOptions<ProblemDe
     }
 }
 ```
+
+### `IProblemDetailsService`
+
+Use `IProblemDetailsService` when you need to write a `ProblemDetails` response directly without relying on the global exception handler middleware. This is useful in middleware, filters, or endpoint logic where exceptions are handled locally and a standardized error response must still be produced.
+
+```csharp
+public sealed class ValidationFilter : IEndpointFilter
+{
+    public async ValueTask<object?> InvokeAsync(
+        EndpointFilterInvocationContext context,
+        EndpointFilterDelegate next)
+    {
+        if (!context.HttpContext.Request.Headers.TryGetValue("X-Api-Key", out _))
+        {
+            var problemDetailsService = context.HttpContext.RequestServices
+                .GetRequiredService<IProblemDetailsService>();
+
+            await problemDetailsService.WriteAsync(new ProblemDetailsContext
+            {
+                HttpContext = context.HttpContext,
+                ProblemDetails =
+                {
+                    Status = StatusCodes.Status401Unauthorized,
+                    Title = "Missing API key",
+                    Detail = "The X-Api-Key header is required."
+                }
+            });
+
+            return Results.Empty;
+        }
+
+        return await next(context);
+    }
+}
+```
+
+Guidelines:
+
+- Use `IProblemDetailsService` when generating problem details inside middleware, filters, or endpoint handlers where the global exception handler does not apply.
+- Prefer the global exception handler and `IExceptionHandler` for unhandled exceptions; use `IProblemDetailsService` for expected, locally handled failures that still require a standardized response.
+- Always pass the current `HttpContext` into `ProblemDetailsContext` so extensions and customization run correctly.
+- Keep the `ProblemDetails` payload consistent with the format produced by the global handler.
 
 ---
 
