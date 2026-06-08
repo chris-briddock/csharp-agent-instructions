@@ -23,20 +23,19 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [LINQ](#linq)
   - [PLINQ](#plinq)
   - [Boxing and Unboxing](#boxing-and-unboxing)
-- [Value Objects](#value-objects)
-- [Nullable Reference Types](#nullable-reference-types)
-- [Generic Variance](#generic-variance)
-- [High-Performance Memory Patterns](#high-performance-memory-patterns)
+  - [Nullable Reference Types](#nullable-reference-types)
+  - [Generic Variance](#generic-variance)
+  - [High-Performance Memory Patterns](#high-performance-memory-patterns)
   - [Object Pooling](#object-pooling)
-- [Modern C# Disposal Patterns](#modern-c-disposal-patterns)
-- [TimeProvider Abstraction](#timeprovider-abstraction)
-- [Documentation Standards](#documentation-standards)
-- [Constants](#constants)
+  - [Modern C# Disposal Patterns](#modern-c-disposal-patterns)
+  - [TimeProvider Abstraction](#timeprovider-abstraction)
+  - [Documentation Standards](#documentation-standards)
+  - [Constants](#constants)
 - [Complexity Metrics](#complexity-metrics)
   - [Cyclomatic Complexity](#cyclomatic-complexity)
   - [Cognitive Complexity](#cognitive-complexity)
 
-## Part II: Architecture & ASP.NET Core
+## Part II: Architecture
 
 - [Architecture](#architecture)
   - [General](#general)
@@ -46,53 +45,62 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [Event-Driven Architecture](#event-driven-architecture)
 - [Service-Oriented Architecture](#service-oriented-architecture)
 - [Domain-Driven Design](#domain-driven-design)
-- [Resilience and Reliability](#resilience-and-reliability)
-- [ASP.NET Core](#aspnet-core)
-  - [API Style](#api-style)
-  - [Endpoint Design](#endpoint-design)
-  - [API Versioning](#api-versioning)
-  - [Dependency Injection](#dependency-injection)
-    - [Service Lifetimes](#service-lifetimes)
-  - [Configuration](#configuration)
-    - [Options Pattern](#options-pattern)
-  - [Logging](#logging)
-  - [Health Checks](#health-checks)
-  - [Background Jobs](#background-jobs)
-  - [Middleware & Filters](#middleware--filters)
-  - [Problem Details](#problem-details)
-  - [Worker Services](#worker-services)
-  - [System.Threading.Channels](#systemthreadingchannels)
-  - [Caching](#caching)
-    - [Output Caching & Response Caching](#output-caching--response-caching)
-  - [Rate Limiting](#rate-limiting)
-  - [OpenAPI](#openapi)
-  - [Feature Flags](#feature-flags)
-  - [CQRS](#cqrs)
-  - [Authentication & Authorization](#authentication--authorization)
-  - [HttpClient & IHttpClientFactory](#httpclient--ihttpclientfactory)
-  - [Distributed Tracing](#distributed-tracing)
-  - [Metrics & OpenTelemetry](#metrics--opentelemetry)
-  - [Persistence Guidelines](#persistence-guidelines)
-    - [DTO Projections via Select()](#dto-projections-via-select)
-    - [AsNoTracking() for Read-Only Queries](#asnotracking-for-read-only-queries)
-    - [Avoiding N+1 Queries](#avoiding-n1-queries)
-    - [Migrations Strategy](#migrations-strategy)
-    - [IEntityTypeConfiguration over OnModelCreating](#ientitytypeconfiguration-over-onmodelcreating)
-    - [Owned Entities, Complex Types, and Value Objects](#owned-entities-complex-types-and-value-objects)
-    - [Avoid Loading Large Graphs Unnecessarily](#avoid-loading-large-graphs-unnecessarily)
-  - [Testing Standards](#testing-standards)
-    - [Unit Testing](#unit-testing)
-    - [Integration Testing](#integration-testing)
-    - [Architecture Testing](#architecture-testing)
-  - [Security Standards](#security-standards)
-  - [Preferred Framework Patterns](#preferred-framework-patterns)
+  - [Business Logic](#business-logic)
+  - [Entities](#entities)
+  - [Value Objects](#value-objects)
+  - [Aggregates](#aggregates)
+  - [Domain Services](#domain-services)
+  - [Domain Exceptions](#domain-exceptions)
   - [Domain Behaviour Pattern](#domain-behaviour-pattern)
+  - [Domain Events](#domain-events)
+- [Resilience and Reliability](#resilience-and-reliability)
+
+## Part III: ASP.NET Core
+
+- [API Style](#api-style)
+- [Endpoint Design](#endpoint-design)
+- [API Versioning](#api-versioning)
+- [Dependency Injection](#dependency-injection)
+  - [Service Lifetimes](#service-lifetimes)
+- [Configuration](#configuration)
+  - [Options Pattern](#options-pattern)
+- [Logging](#logging)
+- [Health Checks](#health-checks)
+- [Background Jobs](#background-jobs)
+- [Middleware & Filters](#middleware--filters)
+- [Problem Details](#problem-details)
+- [Worker Services](#worker-services)
+- [System.Threading.Channels](#systemthreadingchannels)
+- [Caching](#caching)
+  - [Output Caching & Response Caching](#output-caching--response-caching)
+- [Rate Limiting](#rate-limiting)
+- [OpenAPI](#openapi)
+- [Feature Flags](#feature-flags)
+- [CQRS](#cqrs)
+- [Authentication & Authorization](#authentication--authorization)
+- [HttpClient & IHttpClientFactory](#httpclient--ihttpclientfactory)
+- [Distributed Tracing](#distributed-tracing)
+- [Metrics & OpenTelemetry](#metrics--opentelemetry)
+- [Persistence Guidelines](#persistence-guidelines)
+  - [DTO Projections via Select()](#dto-projections-via-select)
+  - [AsNoTracking() for Read-Only Queries](#asnotracking-for-read-only-queries)
+  - [Avoiding N+1 Queries](#avoiding-n1-queries)
+  - [Migrations Strategy](#migrations-strategy)
+  - [IEntityTypeConfiguration over OnModelCreating](#ientitytypeconfiguration-over-onmodelcreating)
+  - [Owned Entities, Complex Types, and Value Objects](#owned-entities-complex-types-and-value-objects)
+  - [Avoid Loading Large Graphs Unnecessarily](#avoid-loading-large-graphs-unnecessarily)
+- [Testing Standards](#testing-standards)
+  - [Unit Testing](#unit-testing)
+  - [Integration Testing](#integration-testing)
+  - [Architecture Testing](#architecture-testing)
+- [Security Standards](#security-standards)
+- [Preferred Framework Patterns](#preferred-framework-patterns)
 - [System.Text.Json](#systemtextjson)
 - [gRPC](#grpc)
 - [SignalR](#signalr)
 - [Server-Sent Events](#server-sent-events)
 
-## Part III: SonarQube C# Rules
+## Part IV: SonarQube C# Rules
 
 - [SonarQube Overview](#sonarqube-overview)
 - [Bugs](#bugs)
@@ -100,7 +108,7 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [Code Smells](#code-smells)
 - [Security Hotspots](#security-hotspots)
 
-## Part IV: AI Agent Instructions
+## Part V: AI Agent Instructions
 
 - [AI Agent Instructions](#ai-agent-instructions)
 
@@ -149,6 +157,8 @@ Use PascalCase.
 
 Boolean properties should be predicates.
 
+Prefer properties by default over fields.
+
 ```csharp
 IsActive
 HasPermission
@@ -166,6 +176,8 @@ private readonly ILogger<UserService> _logger;
 ### Parameters and Locals
 
 Use camelCase.
+
+Prefer fields when you are defining constants and static readonly values, also for domain collections and private internal implementation details.
 
 ---
 
@@ -1350,80 +1362,6 @@ Prefer:
 
 ---
 
-## Domain Behaviour Pattern
-
-### Entity Behaviour
-
-Prefer adding behaviour through extension methods rather than methods on entity classes.
-
-Example:
-
-```csharp
-/// <summary>
-/// Extension methods for managing Session entity properties and status.
-/// </summary>
-public static class SessionExtensions
-{
-    /// <summary>
-    /// Marks the session as revoked.
-    /// </summary>
-    /// <param name="session">The session to revoke.</param>
-    /// <param name="revokedAt">The timestamp when revoked. Defaults to current UTC time.</param>
-    /// <returns>The session for method chaining.</returns>
-    public static Session MarkAsRevoked(
-        this Session session,
-        DateTimeOffset? revokedAt = null)
-    {
-        session.Status = SessionStatus.Revoked;
-        session.RevokedAt = revokedAt ?? DateTimeOffset.UtcNow;
-
-        return session;
-    }
-}
-```
-
-Guidelines:
-
-- Prefer extension methods for entity behaviour.
-- Keep entities focused on state and persistence concerns.
-- Group extensions by entity.
-- Return the entity when method chaining improves readability.
-- Place extensions close to the feature they belong to.
-
----
-
-## Value Objects
-
-Value objects are immutable objects defined by their attributes rather than identity. Two value objects with the same data are equal. Use them for concepts like money, addresses, and email values.
-
-```csharp
-public sealed record Money
-{
-    public required decimal Amount { get; init; }
-    public required string Currency { get; init; }
-
-    public Money Add(Money other)
-    {
-        ArgumentNullException.ThrowIfNull(other);
-
-        if (Currency != other.Currency)
-        {
-            throw new InvalidOperationException("Cannot add money with different currencies.");
-        }
-
-        return this with { Amount = Amount + other.Amount };
-    }
-}
-```
-
-Guidelines:
-
-- Make value objects immutable.
-- Implement equality based on value, not reference.
-- Validate invariants in the constructor or factory method.
-- Use `record` types where possible.
-- Return new instances instead of mutating state.
-
 ---
 
 ### Service Lifetimes
@@ -1973,19 +1911,41 @@ Guidelines:
 
 ## General
 
-- Prefer Vertical Slice Architecture.
-- Organize code by feature rather than technical concern.
+- Prefer code organized by technical concern.
 - Prefer folders over additional assemblies unless there is a demonstrated need.
-- Keep dependency direction flowing inward.
+- Keep dependency direction flowing inward. Domain should not depend on anything.
 
 Preferred structure:
 
 ```text
 src/
 ├── Api/
+    ├── Endpoints/
+    ├── Middlware/
+    ├── Filters/
+    ├── Constants/
 ├── Application/
+    ├── BackgroundServices/
+    ├── Constants/
+    ├── DTOs/
+    ├── Exceptions/
+    ├── Extensions/
+    ├── Providers/
+    ├── Results/
+    ├── Validators/
 ├── Domain/
+    ├── Entities/
+    ├── Contracts/
+    ├── Events/
+    ├── Extensions/
+    ├── Results/
+    ├── ValueObjects/
 ├── Persistence/
+    ├── Configurations/
+    ├── Contexts/
+    ├── Factories/
+    ├── Seed/
+    ├── Migrations/
 └── Infrastructure/
 
 tests/
@@ -2224,7 +2184,7 @@ Guidelines:
 
 ## Domain-Driven Design
 
-## Business Logic
+### Business Logic
 
 Business rules belong in domain objects.
 
@@ -2246,7 +2206,7 @@ when domain behaviour exists.
 
 ---
 
-## Entities
+### Entities
 
 Entities should protect invariants through constructors and methods rather than allowing direct mutation of state.
 
@@ -2299,13 +2259,445 @@ Avoid exposing mutable state unnecessarily. Prefer immutable or read-only proper
 
 ---
 
+### Value Objects
+
+Value objects are immutable objects defined by their attributes rather than identity. Two value objects with the same data are equal. Use them for concepts like money, addresses, and email values.
+
+```csharp
+public sealed record Money
+{
+    public required decimal Amount { get; init; }
+    public required string Currency { get; init; }
+
+    public Money Add(Money other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        if (Currency != other.Currency)
+        {
+            throw new InvalidOperationException("Cannot add money with different currencies.");
+        }
+
+        return this with { Amount = Amount + other.Amount };
+    }
+}
+```
+
+Guidelines:
+
+- Make value objects immutable.
+- Implement equality based on value, not reference.
+- Validate invariants in the constructor or factory method.
+- Use `record` types where possible.
+- Return new instances instead of mutating state.
+
+---
+
+### Aggregates
+
+Aggregates are clusters of associated entities and value objects that are treated as a single unit for data changes. Every aggregate has an aggregate root — the entity that controls access to the aggregate's members and enforces invariants across the boundary.
+
+**Compliant:**
+
+```csharp
+public sealed class Order // Aggregate Root
+{
+    public Guid Id { get; private set; }
+    public IReadOnlyCollection<OrderLine> Lines => _lines.AsReadOnly();
+    private readonly List<OrderLine> _lines = [];
+
+    public Order(Guid id)
+    {
+        Id = id;
+    }
+
+    public void AddLine(Product product, int quantity)
+    {
+        ArgumentNullException.ThrowIfNull(product);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(quantity);
+
+        var line = _lines.FirstOrDefault(l => l.ProductId == product.Id);
+        if (line is not null)
+        {
+            line.IncreaseQuantity(quantity);
+        }
+        else
+        {
+            _lines.Add(new OrderLine(product.Id, product.Price, quantity));
+        }
+    }
+
+    public decimal CalculateTotal()
+    {
+        return _lines.Sum(l => l.LineTotal);
+    }
+}
+
+public sealed class OrderLine // Entity within the aggregate
+{
+    public Guid ProductId { get; private set; }
+    public decimal UnitPrice { get; private set; }
+    public int Quantity { get; private set; }
+
+    public decimal LineTotal => UnitPrice * Quantity;
+
+    public OrderLine(Guid productId, decimal unitPrice, int quantity)
+    {
+        ProductId = productId;
+        UnitPrice = unitPrice;
+        Quantity = quantity;
+    }
+
+    internal void IncreaseQuantity(int amount)
+    {
+        Quantity += amount;
+    }
+}
+```
+
+Guidelines:
+
+- Maintain invariants across the entire aggregate boundary, not just the root.
+- Reference other aggregates by identity (ID) only, never by direct object reference.
+- The aggregate root is the only member that external code should access directly.
+- Keep aggregates as small as possible to reduce transactional scope and contention.
+- Use private constructors and factory methods to enforce creation rules.
+
+---
+
+### Domain Services
+
+Use domain services when a significant business process or transformation does not naturally belong to an entity or value object. Domain services operate on multiple aggregates or coordinate operations that cross aggregate boundaries.
+
+**Compliant:**
+
+```csharp
+public sealed class OrderPricingService
+{
+    public decimal CalculateDiscountedTotal(Order order, Customer customer)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(customer);
+
+        var baseTotal = order.CalculateTotal();
+
+        return customer.LoyaltyTier switch
+        {
+            LoyaltyTier.Gold => baseTotal * 0.90m,
+            LoyaltyTier.Silver => baseTotal * 0.95m,
+            _ => baseTotal
+        };
+    }
+}
+```
+
+Guidelines:
+
+- Keep domain services stateless; they should not hold mutable state between operations.
+- Prefer placing behaviour on entities first; introduce a domain service only when the operation naturally spans multiple aggregates or does not belong to any single entity.
+- Domain services should not access infrastructure directly (e.g., databases, message brokers).
+- Name domain services after the business capability they represent (e.g., `OrderPricingService`, `InventoryAllocationService`).
+
+---
+
+### Domain Exceptions
+
+Use domain-specific exceptions to communicate invariant violations and business rule failures. Domain exceptions should be named, typed exceptions that make the failure mode explicit and catchable.
+
+**Compliant:**
+
+```csharp
+public abstract class DomainException : Exception
+{
+    protected DomainException(string message) : base(message) { }
+    protected DomainException(string message, Exception inner) : base(message, inner) { }
+}
+
+public sealed class OrderAlreadyShippedException : DomainException
+{
+    public OrderAlreadyShippedException(Guid orderId)
+        : base($"Order {orderId} has already been shipped and cannot be modified.")
+    {
+        OrderId = orderId;
+    }
+
+    public Guid OrderId { get; }
+}
+
+public sealed class InsufficientStockException : DomainException
+{
+    public InsufficientStockException(Guid productId, int requested, int available)
+        : base($"Insufficient stock for product {productId}. Requested: {requested}, Available: {available}.")
+    {
+        ProductId = productId;
+        Requested = requested;
+        Available = available;
+    }
+
+    public Guid ProductId { get; }
+    public int Requested { get; }
+    public int Available { get; }
+}
+```
+
+Usage in an entity:
+
+```csharp
+public sealed class Order
+{
+    public void Cancel()
+    {
+        if (Status == OrderStatus.Shipped)
+        {
+            throw new OrderAlreadyShippedException(Id);
+        }
+
+        Status = OrderStatus.Cancelled;
+    }
+}
+```
+
+Guidelines:
+
+- Derive all domain exceptions from a common `DomainException` base class.
+- Include contextual data in the exception (e.g., IDs, requested values) to aid debugging.
+- Use domain exceptions for invariant violations, not for expected validation failures (use `Result<T>` for those).
+- Avoid leaking infrastructure concerns inside domain exceptions.
+- Do not use generic exceptions (`ArgumentException`, `InvalidOperationException`) when a named domain exception communicates intent more clearly.
+
+---
+
+### Domain Behaviour Pattern
+
+#### Entity Behaviour
+
+Prefer adding behaviour through extension methods rather than methods on entity classes.
+
+Example:
+
+```csharp
+/// <summary>
+/// Extension methods for managing Session entity properties and status.
+/// </summary>
+public static class SessionExtensions
+{
+    /// <summary>
+    /// Marks the session as revoked.
+    /// </summary>
+    /// <param name="session">The session to revoke.</param>
+    /// <param name="revokedAt">The timestamp when revoked. Defaults to current UTC time.</param>
+    /// <returns>The session for method chaining.</returns>
+    public static Session MarkAsRevoked(
+        this Session session,
+        DateTimeOffset? revokedAt = null)
+    {
+        session.Status = SessionStatus.Revoked;
+        session.RevokedAt = revokedAt ?? DateTimeOffset.UtcNow;
+
+        return session;
+    }
+}
+```
+
+Guidelines:
+
+- Prefer extension methods for entity behaviour.
+- Keep entities focused on state and persistence concerns.
+- Group extensions by entity.
+- Return the entity when method chaining improves readability.
+- Place extensions close to the feature they belong to.
+
+---
+
 ### Domain Events
 
-Use domain events for side effects and cross-cutting concerns within a service.
+Domain events capture something of business significance that has already happened. They are immutable, past-tense facts that enable loose coupling between aggregates and allow side effects to be handled asynchronously.
 
-Avoid coupling domain logic directly to infrastructure concerns.
+**Compliant:**
 
-### Publishing
+```csharp
+public abstract class DomainEvent
+{
+    public required Guid EventId { get; init; }
+    public required DateTimeOffset OccurredAt { get; init; }
+}
+
+public sealed class OrderCreatedEvent : DomainEvent
+{
+    public required Guid OrderId { get; init; }
+    public required Guid CustomerId { get; init; }
+    public required decimal Total { get; init; }
+}
+
+public sealed class OrderShippedEvent : DomainEvent
+{
+    public required Guid OrderId { get; init; }
+    public required DateTimeOffset ShippedAt { get; init; }
+}
+```
+
+Guidelines:
+
+- Name events in past tense (`OrderCreated`, `PaymentReceived`, `UserActivated`).
+- Include all data required by consumers; do not force subscribers to query the aggregate.
+- Keep events focused on a single business fact.
+- Use `Guid.NewGuid()` for `EventId` and `DateTimeOffset.UtcNow` for `OccurredAt`.
+
+#### Raising Events from Aggregates
+
+Events should be raised from within the aggregate as part of the state-changing operation.
+
+```csharp
+public sealed class Order
+{
+    private readonly List<DomainEvent> _domainEvents = [];
+    public IReadOnlyCollection<DomainEvent> DomainEvents => _domainEvents.AsReadOnly();
+
+    public void Ship(DateTimeOffset shippedAt)
+    {
+        if (Status == OrderStatus.Shipped)
+        {
+            throw new OrderAlreadyShippedException(Id);
+        }
+
+        Status = OrderStatus.Shipped;
+        _domainEvents.Add(new OrderShippedEvent
+        {
+            EventId = Guid.NewGuid(),
+            OccurredAt = DateTimeOffset.UtcNow,
+            OrderId = Id,
+            ShippedAt = shippedAt
+        });
+    }
+
+    public void ClearDomainEvents()
+    {
+        _domainEvents.Clear();
+    }
+}
+```
+
+Guidelines:
+
+- Collect events in a private list and expose them via a read-only property.
+- Raise the event inside the same method that mutates state.
+- Provide a `ClearDomainEvents` method so the application layer can clear events after dispatch.
+- Never raise events from property setters.
+
+#### Dispatching Events
+
+Dispatch domain events before or after persistence depending on consistency requirements.
+
+**Before persistence (strong consistency):**
+
+```csharp
+public async Task HandleAsync(CreateOrderCommand command, CancellationToken ct)
+{
+    var order = Order.Create(command.CustomerId, command.Items);
+
+    // Dispatch before save so handlers can reject the transaction
+    await _domainEventDispatcher.DispatchAsync(order.DomainEvents, ct);
+
+    await _orderRepository.SaveAsync(order, ct);
+    order.ClearDomainEvents();
+}
+```
+
+**After persistence (eventual consistency):**
+
+```csharp
+public async Task HandleAsync(CreateOrderCommand command, CancellationToken ct)
+{
+    var order = Order.Create(command.CustomerId, command.Items);
+
+    await _orderRepository.SaveAsync(order, ct);
+
+    // Dispatch after save so the aggregate is guaranteed persisted
+    await _domainEventDispatcher.DispatchAsync(order.DomainEvents, ct);
+    order.ClearDomainEvents();
+}
+```
+
+Guidelines:
+
+- Dispatch before persistence when downstream handlers must validate or reject the operation atomically.
+- Dispatch after persistence when the operation must survive regardless of handler success.
+- Always clear events after dispatch to prevent duplicate handling.
+- Wrap dispatch and persistence in a transaction when strong consistency is required.
+
+#### Domain Events vs Integration Events
+
+Keep domain events internal. Translate them to integration events at the application boundary.
+
+```csharp
+// Internal to the service
+public sealed class OrderCreatedEvent : DomainEvent
+{
+    public required Guid OrderId { get; init; }
+}
+
+// Cross-service contract
+public sealed class OrderCreatedIntegrationEvent
+{
+    public required Guid OrderId { get; init; }
+    public required string CorrelationId { get; init; }
+    public required int Version { get; init; } = 1;
+}
+```
+
+Guidelines:
+
+- Domain events carry only what the domain needs.
+- Integration events add infrastructure concerns (correlation IDs, versioning, timestamps).
+- Never expose domain events directly outside the service.
+- Translate at the application layer before publishing to a message broker.
+
+#### Idempotency
+
+Event handlers must be idempotent. Assume the same event may be delivered more than once.
+
+```csharp
+public sealed class OrderCreatedHandler
+{
+    public async Task HandleAsync(OrderCreatedEvent @event, CancellationToken ct)
+    {
+        if (await _orderRepository.ExistsAsync(@event.OrderId, ct))
+        {
+            return; // Already processed
+        }
+
+        // Process event...
+    }
+}
+```
+
+Guidelines:
+
+- Use natural keys or idempotency keys to detect duplicates.
+- Persist idempotency keys alongside processed events.
+- Design handlers so duplicate delivery has no harmful side effects.
+
+#### Event Versioning
+
+Version integration event schemas explicitly to support additive evolution.
+
+```csharp
+public sealed record OrderCreatedIntegrationEvent
+{
+    public required Guid OrderId { get; init; }
+    public required Guid CustomerId { get; init; }
+    public required DateTimeOffset OccurredAt { get; init; }
+    public required int Version { get; init; } = 1;
+}
+```
+
+Guidelines:
+
+- Add new fields; never remove or rename existing ones.
+- Default new fields to backward-compatible values.
+- Version the integration event, not the domain event.
+
+#### Publishing
 
 - Raise domain events from aggregates.
 - Dispatch domain events before or after persistence (depending on consistency requirements).
@@ -2462,7 +2854,7 @@ Guidelines:
 
 ## API Style
 
-Minimal APIs are preferred, but equally consider using controllers as per below.
+Controllers with an EndpointBase class are preferred, but equally consider minimal apis.
 
 Prefer:
 
@@ -2869,7 +3261,7 @@ Guidelines:
 
 ### Exception Handling Middleware
 
-Global exception handling should translate unhandled exceptions to [`ProblemDetails`](AGENTS.md:1033) responses and log appropriately.
+Global exception handling should translate unhandled exceptions to [`ProblemDetails`](#problem-details) responses and log appropriately.
 
 ```csharp
 public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
@@ -2925,24 +3317,6 @@ Use a worker service when the application must:
 - Operate as a saga orchestrator or process manager in an event-driven system.
 
 **Prefer a worker service over a web API** when there is no requirement for HTTP endpoints or real-time request/response interaction.
-
-## Project Setup
-
-Create the project using the Worker template:
-
-```bash
-dotnet new worker -n ArbitrageIQ.Trading.WorkerService.OrderProcessing
-```
-
-This generates a `Program.cs` that calls `IHostBuilder` and registers the default worker:
-
-```csharp
-var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddHostedService<OrderProcessingWorker>();
-
-var host = builder.Build();
-host.Run();
-```
 
 ## Worker Implementation
 
@@ -4848,7 +5222,7 @@ public void Domain_Should_Not_Depend_On_Infrastructure()
 
 Guidelines:
 
-- Use ArchUnitNET or TngTech.ArchUnit to enforce dependency direction.
+- Use NetArchTest.Rules, ArchUnitNET or TngTech.ArchUnit to enforce dependency direction.
 - Run architecture tests in CI on every build.
 - Enforce that `Domain` does not reference `Application`, `Infrastructure`, or `Api`.
 - Verify that feature folders do not create circular dependencies.
