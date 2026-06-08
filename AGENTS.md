@@ -43,6 +43,9 @@ When multiple valid approaches exist, choose the simplest solution that preserve
 - [Central Package Management](#central-package-management)
 - [Service Naming Conventions](#service-naming-conventions)
 - [Event-Driven Architecture](#event-driven-architecture)
+  - [Atomic Event Chains Across Boundaries](#atomic-event-chains-across-boundaries)
+  - [Saga Pattern](#saga-pattern)
+  - [State Machines for Sagas](#state-machines-for-sagas)
 - [Service-Oriented Architecture](#service-oriented-architecture)
 - [Domain-Driven Design](#domain-driven-design)
   - [Business Logic](#business-logic)
@@ -2073,8 +2076,6 @@ public static class ServiceDefaults
 }
 ```
 
----
-
 ## Event-Driven Architecture
 
 ## Communication Style
@@ -2124,6 +2125,124 @@ public sealed class OrderCreatedHandler : IEventHandler<OrderCreatedEvent>
     }
 }
 ```
+
+### Atomic Event Chains Across Boundaries
+
+When an event triggers a chain of downstream events that cross multiple states, bounded contexts, or service boundaries, the entire chain must be applied atomically from the perspective of the initiating operation. Partial application leads to inconsistent distributed state that is difficult to reconcile.
+
+### The Problem
+
+An event is processed, a local state change is committed, and a subsequent event is published to another service. If the publish fails or the downstream service crashes after receiving the event but before committing, the initiating service believes the work is done while the rest of the chain is incomplete.
+
+### The Outbox Pattern
+
+Use the Outbox Pattern to ensure atomicity between database commits and event publishing. Store the event to be published in the same transaction as the business data change, then relay it asynchronously.
+
+A background relay service polls the outbox table and publishes messages to the message broker, marking them as sent only after successful publish.
+
+### Saga Coordination for Multi-Step Chains
+
+When an event chain spans multiple services and each step must succeed or be explicitly undone, wrap the chain in a saga. The saga orchestrator treats the entire chain as a single logical transaction, invoking compensating actions for any steps already completed if a downstream step fails.
+
+See [Saga Pattern](#saga-pattern) for detailed saga design guidelines.
+
+### Idempotency in Event Chains
+
+Every handler in the chain must be idempotent. A handler may be retried if the outbox relay duplicates a message, if the saga orchestrator replays a step, or if at-least-once delivery semantics are in use.
+
+- Use natural business keys (e.g., `OrderId`) to detect duplicate events.
+- Persist idempotency keys alongside business state in the same transaction as the state change.
+- Do not deduplicate by message ID alone if the message broker may reuse identifiers.
+
+```csharp
+public async Task HandleAsync(PaymentRequestedEvent @event, CancellationToken ct)
+{
+    await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
+
+    if (await _processedEventStore.ExistsAsync(@event.EventId, ct))
+    {
+        return; // Already processed
+    }
+
+    await _paymentService.ChargeAsync(@event.OrderId, ct);
+    await _processedEventStore.RecordAsync(@event.EventId, ct);
+
+    _outboxStore.Enqueue(new PaymentProcessedEvent { OrderId = @event.OrderId });
+    await _dbContext.SaveChangesAsync(ct);
+    await transaction.CommitAsync(ct);
+}
+```
+
+Guidelines:
+
+- Never publish an event to a message broker inside the same logical operation without first persisting it transactionally alongside the state change.
+- Prefer the outbox pattern for all cross-service event publication triggered by local state changes.
+- Treat each service's participation in the chain as a local transaction with outbox persistence; rely on the saga orchestrator for cross-service consistency.
+- Ensure every step in the chain can be retried safely without side effects.
+- Monitor outbox queue depth and saga state for stuck or slow event chains.
+
+---
+
+### Saga Pattern
+
+Use the Saga pattern to manage long-running business transactions that span multiple services. Since distributed transactions (e.g., two-phase commit) should be avoided in service-oriented architecture, sagas break a global transaction into a sequence of local transactions, each followed by a compensating action if a step fails.
+
+### Saga Types
+
+**Choreography-Based Saga:**
+
+- Services react to events published by other services.
+- Each service performs its local transaction and publishes an event for the next service.
+- If a step fails, the service publishes a compensating event that preceding services react to.
+- Prefer choreography when the saga is simple, has few steps, and does not require centralized oversight.
+
+**Orchestration-Based Saga:**
+
+- A central Saga Orchestrator coordinates the sequence of steps.
+- The orchestrator sends commands to services and waits for replies.
+- If a step fails, the orchestrator invokes compensating actions on previously completed steps in reverse order.
+- Prefer orchestration when the saga is complex, has many steps, requires conditional branching, or needs visibility into overall progress.
+
+### Saga Design Guidelines
+
+- Keep saga steps idempotent; the same step may be retried or replayed during recovery.
+- Define explicit compensating actions for every step that mutates state. A compensating action must semantically undo the original operation (e.g., refund a payment, release reserved stock).
+- Saga steps and compensations must be deterministic; avoid side effects that cannot be undone (e.g., sending an irreversible external notification should happen only after the saga reaches a terminal success state).
+- Persist saga state explicitly so it survives process crashes. Store the current step, inputs, and outcomes.
+- Avoid sagas that span more than a handful of services; excessive scope increases failure surface and coupling.
+
+Guidelines:
+
+- Saga orchestrators should be thin coordinators; keep business logic inside domain services, not in the orchestrator itself.
+- Log every step, compensation, and failure with the saga ID for end-to-end traceability.
+- Make compensations idempotent; they may be invoked multiple times during retries or partial failures.
+- Do not rely on in-memory saga state; persist it to a database or durable store.
+
+---
+
+### State Machines for Sagas
+
+Use explicit state machines to model saga lifecycle, transitions, and allowed operations. A state machine makes the saga's behaviour explicit, testable, and resilient to invalid transitions.
+
+### When to Use a State Machine
+
+- The saga has more than three steps or complex conditional branching.
+- Steps must be executed in a strict order with explicit guards.
+- You need to query the current state of a saga for observability or debugging.
+- Compensations are conditional or vary based on how far the saga progressed.
+
+### State Machine Design
+
+Define states as an enum or a record type and transitions as explicit methods or a library-based state machine. Keep state definitions close to the saga orchestrator or in the domain layer if the saga is a core business process.
+
+Guidelines:
+
+- Keep state transitions immutable; record each transition with a timestamp for audit purposes.
+- Reject invalid transitions explicitly rather than silently ignoring them.
+- Use a library (e.g., Stateless) only when the saga complexity justifies the dependency; for simple sagas, an explicit `switch` expression or state pattern is sufficient.
+- Persist the state machine state alongside the aggregate or in a dedicated saga state table.
+- Expose the current saga state via query endpoints for operational visibility.
+- Ensure the state machine is thread-safe if multiple workers may process saga events concurrently.
 
 ---
 
