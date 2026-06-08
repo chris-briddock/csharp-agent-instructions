@@ -31,6 +31,11 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [TimeProvider Abstraction](#timeprovider-abstraction)
   - [Documentation Standards](#documentation-standards)
   - [Constants](#constants)
+- [Ahead-of-Time Compilation](#ahead-of-time-compilation)
+- [Source Generators](#source-generators)
+- [Generic Math](#generic-math)
+- [Advanced Memory & ref Patterns](#advanced-memory--ref-patterns)
+- [ConfigureAwait Guidance](#configureawait-guidance)
 - [Complexity Metrics](#complexity-metrics)
   - [Cyclomatic Complexity](#cyclomatic-complexity)
   - [Cognitive Complexity](#cognitive-complexity)
@@ -96,6 +101,12 @@ When multiple valid approaches exist, choose the simplest solution that preserve
   - [Unit Testing](#unit-testing)
   - [Integration Testing](#integration-testing)
   - [Architecture Testing](#architecture-testing)
+  - [Performance Testing](#performance-testing)
+    - [BenchmarkDotNet](#benchmarkdotnet)
+    - [Load Testing](#load-testing)
+    - [Smoke Testing](#smoke-testing)
+    - [Soak Testing](#soak-testing)
+    - [Stress Testing](#stress-testing)
 - [Security Standards](#security-standards)
 - [Preferred Framework Patterns](#preferred-framework-patterns)
 - [System.Text.Json](#systemtextjson)
@@ -1052,6 +1063,339 @@ Guidelines:
 - Be aware that boxing can occur when casting structs to interfaces.
 - Avoid passing value types to methods that accept `object` or `IEnumerable` in performance-critical code.
 - Use `Span<T>`, `ReadOnlySpan<T>`, and `Memory<T>` for high-performance buffer manipulation without boxing.
+
+---
+
+## Ahead-of-Time Compilation
+
+Native Ahead-of-Time (AOT) compilation produces a self-contained binary without a JIT compiler, improving startup time and reducing binary size. It is the default for trimming and single-file deployment.
+
+### Publishing with AOT
+
+Set `<PublishAot>true</PublishAot>` in the project file and publish with `dotnet publish -r <RID> -c Release`.
+
+```xml
+<PropertyGroup>
+  <PublishAot>true</PublishAot>
+</PropertyGroup>
+```
+
+Guidelines:
+
+- Prefer AOT for console applications, worker services, and containerised microservices that require fast startup.
+- AOT is not supported for all ASP.NET Core scenarios; verify compatibility before enabling.
+- Publish for a specific runtime identifier (`-r linux-x64`, `-r win-x64`).
+
+### Trimming and Reflection Constraints
+
+Trimming removes unused code, which can break reflection-based code paths. AOT is even stricter: runtime code generation is disallowed.
+
+**Noncompliant:**
+
+```csharp
+public T CreateInstance<T>()
+{
+    return (T)Activator.CreateInstance(typeof(T));
+}
+```
+
+**Compliant:**
+
+```csharp
+public T CreateInstance<T>() where T : new()
+{
+    return new T();
+}
+```
+
+Guidelines:
+
+- Avoid `Activator.CreateInstance`, `Assembly.Load`, and dynamic keyword usage in AOT-enabled projects.
+- Mark APIs that rely on dynamic code with `[RequiresDynamicCode]` and `[RequiresUnreferencedCode]`.
+- Use source generators to provide compile-time alternatives to runtime reflection.
+
+### DynamicallyAccessedMembers Attribute
+
+Preserve members that would otherwise be trimmed by annotating generic type parameters or parameters with `[DynamicallyAccessedMembers]`.
+
+```csharp
+public void Process<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods)] T>()
+{
+    var methods = typeof(T).GetMethods();
+    // Safe because the linker preserves public methods of T
+}
+```
+
+Guidelines:
+
+- Annotate reflection entry points with `[DynamicallyAccessedMembers]`.
+- Prefer `DynamicallyAccessedMemberTypes` granularity over broad `All`.
+- Do not suppress trim warnings globally; resolve them explicitly.
+
+---
+
+## Source Generators
+
+Source generators run at compile time to generate C# code, eliminating runtime reflection and improving AOT compatibility.
+
+### When to Use Source Generators
+
+- Serialisation contracts (JSON, protobuf).
+- Regex compilation.
+- ORM mapping configuration.
+- Automatic DTO mapping.
+
+### GeneratedRegex Attribute
+
+Use `[GeneratedRegex]` for AOT-friendly, pre-compiled regular expressions.
+
+```csharp
+public static partial class RegexPatterns
+{
+    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled)]
+    public static partial Regex DateRegex();
+}
+```
+
+Guidelines:
+
+- Prefer `[GeneratedRegex]` over `RegexOptions.Compiled` or runtime-compiled patterns in AOT projects.
+- The regex is compiled into the assembly at build time; no JIT is required.
+
+### JsonSerializerContext for Native AOT
+
+Declare a `JsonSerializerContext` to enable `System.Text.Json` in AOT applications without reflection.
+
+```csharp
+[JsonSerializable(typeof(OrderDto))]
+[JsonSerializable(typeof(List<OrderDto>))]
+public partial class OrderJsonContext : JsonSerializerContext
+{
+}
+```
+
+Usage:
+
+```csharp
+var order = JsonSerializer.Deserialize(json, OrderJsonContext.Default.OrderDto);
+```
+
+Guidelines:
+
+- Always provide a `JsonSerializerContext` when using `System.Text.Json` in AOT.
+- Include all serialised types in the context; missing types will fail at runtime.
+- Use the `Default` singleton for optimal performance.
+
+### LibraryImport for Native Interop
+
+Replace `[DllImport]` with `[LibraryImport]` to generate P/Invoke marshalling code at compile time, eliminating runtime IL stubs.
+
+```csharp
+public static partial class NativeMethods
+{
+    [LibraryImport("kernel32", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool CloseHandle(IntPtr handle);
+}
+```
+
+Guidelines:
+
+- Use `[LibraryImport]` for all new native interop in .NET 7+.
+- The generator produces AOT-compatible marshalling code automatically.
+- Keep interop signatures thin; avoid complex manual marshalling.
+
+---
+
+## Generic Math
+
+C# 11 introduces static abstract interface members, enabling generic algorithms over numeric types without boxing or duplication.
+
+### INumber and Related Interfaces
+
+```csharp
+public static T CalculateAverage<T>(List<T> values) where T : INumber<T>
+{
+    if (values.Count == 0)
+    {
+        return T.Zero;
+    }
+
+    var sum = T.Zero;
+    foreach (var value in values)
+    {
+        sum += value;
+    }
+
+    return sum / T.CreateChecked(values.Count);
+}
+```
+
+Guidelines:
+
+- Use `INumber<T>`, `IAdditionOperators<T, T, T>`, and related abstractions for arithmetic generics.
+- This avoids boxing and allows the JIT to specialise the generic method per value type.
+- Prefer generic math over `dynamic` or `Convert.ToDouble` for numeric abstraction.
+
+### Operator Constraints
+
+```csharp
+public static T Max<T>(T a, T b) where T : IComparable<T>
+{
+    return a.CompareTo(b) > 0 ? a : b;
+}
+```
+
+Guidelines:
+
+- Constrain to the minimal interface required (`IComparable<T>` rather than `INumber<T>` if only ordering is needed).
+- Avoid custom operator constraints when built-in interfaces suffice.
+
+---
+
+## Advanced Memory & ref Patterns
+
+Modern C# provides low-level memory abstractions that avoid heap allocation and improve cache locality in hot paths.
+
+### ref Fields and ref Structs
+
+`ref struct` types can hold `ref` fields, enabling safe encapsulation of stack-allocated or externally allocated memory.
+
+```csharp
+public readonly ref struct SpanReader<T>
+{
+    private readonly ReadOnlySpan<T> _span;
+    private int _position;
+
+    public SpanReader(ReadOnlySpan<T> span)
+    {
+        _span = span;
+        _position = 0;
+    }
+
+    public bool TryRead(out T value)
+    {
+        if (_position >= _span.Length)
+        {
+            value = default!;
+            return false;
+        }
+
+        value = _span[_position++];
+        return true;
+    }
+}
+```
+
+Guidelines:
+
+- Use `ref struct` for lightweight, stack-only abstractions over contiguous memory.
+- `ref struct` cannot be boxed, stored in fields, or used in `async` methods.
+- Prefer `ReadOnlySpan<T>` over `Span<T>` for read-only views.
+
+### Inline Arrays (C# 12)
+
+`InlineArray` provides a fixed-length, contiguous buffer inside a struct without unsafe code.
+
+```csharp
+[InlineArray(4)]
+public struct Vector4
+{
+    private float _element;
+}
+```
+
+Guidelines:
+
+- Use `InlineArray` for small, fixed-size buffers in performance-critical structs.
+- Access elements via indexer; the compiler generates efficient pointer-based access.
+- Limit total struct size to avoid excessive stack copying.
+
+### Unsafe vs. Safe Fast Patterns
+
+Prefer safe abstractions (`Span<T>`, `Memory<T>`, `stackalloc`) over `unsafe` code.
+
+**Compliant:**
+
+```csharp
+public int Sum(ReadOnlySpan<int> values)
+{
+    Span<int> buffer = stackalloc int[values.Length];
+    values.CopyTo(buffer);
+
+    int sum = 0;
+    foreach (var value in buffer)
+    {
+        sum += value;
+    }
+
+    return sum;
+}
+```
+
+Guidelines:
+
+- Only use `unsafe` when no safe alternative exists and the performance gain is proven.
+- Keep `unsafe` blocks minimal and isolated.
+- Use `Unsafe` class methods sparingly; prefer `Span<T>` operations.
+
+---
+
+## ConfigureAwait Guidance
+
+`ConfigureAwait(false)` is a historical performance optimisation that prevents context capture. Its necessity depends on the calling environment.
+
+### When to Use `ConfigureAwait(false)`
+
+Use it in library code that does not need to resume on the original synchronization context.
+
+```csharp
+public async Task<byte[]> ReadFileAsync(string path, CancellationToken ct = default)
+{
+    using var stream = File.OpenRead(path);
+    using var memory = new MemoryStream();
+
+    await stream.CopyToAsync(memory, ct).ConfigureAwait(false);
+    return memory.ToArray();
+}
+```
+
+### When NOT to Use `ConfigureAwait(false)`
+
+Do not use it in ASP.NET Core request handlers, Blazor, or any code that must resume on the original context to access `HttpContext`, UI components, or request-scoped state.
+
+**Noncompliant:**
+
+```csharp
+public async Task<IActionResult> GetOrderAsync(Guid id)
+{
+    var order = await _orderRepository.GetByIdAsync(id).ConfigureAwait(false);
+
+    // May fail because HttpContext is not valid on a different thread
+    _logger.LogInformation("Fetched order for user {UserId}", User.FindFirst("sub")?.Value);
+
+    return Ok(order);
+}
+```
+
+**Compliant:**
+
+```csharp
+public async Task<IActionResult> GetOrderAsync(Guid id, CancellationToken ct = default)
+{
+    var order = await _orderRepository.GetByIdAsync(id, ct);
+    _logger.LogInformation("Fetched order for user {UserId}", User.FindFirst("sub")?.Value);
+
+    return Ok(order);
+}
+```
+
+Guidelines:
+
+- In ASP.NET Core, the synchronization context is `null`; `ConfigureAwait(false)` is unnecessary but harmless.
+- Still, prefer omitting it in application-layer code for clarity.
+- Always use it in shared library code that may be consumed by WinForms, WPF, or legacy ASP.NET.
+- Never use it in code that must interact with `HttpContext`, `IAuthenticationService`, or other request-bound abstractions after an await.
 
 ---
 
@@ -5347,9 +5691,150 @@ Guidelines:
 - Verify that feature folders do not create circular dependencies.
 - Treat architecture tests as first-class tests; they should fail the build on violation.
 
+## Performance Testing
+
+Performance testing ensures the system meets latency, throughput, and resource utilisation requirements under expected and peak conditions. Include performance tests for hot paths, critical endpoints, and algorithms where complexity or scale is a concern.
+
+### BenchmarkDotNet
+
+Use BenchmarkDotNet for micro-benchmarking of algorithms, data structures, and small units of code. Run benchmarks only in Release configuration.
+
+```csharp
+[MemoryDiagnoser]
+public class OrderTotalBenchmark
+{
+    private readonly List<OrderLine> _lines = TestData.CreateLines(1000);
+
+    [Benchmark(Baseline = true)]
+    public decimal CalculateWithLinq()
+    {
+        return _lines.Sum(l => l.UnitPrice * l.Quantity);
+    }
+
+    [Benchmark]
+    public decimal CalculateWithLoop()
+    {
+        decimal total = 0;
+        foreach (var line in _lines)
+        {
+            total += line.UnitPrice * line.Quantity;
+        }
+        return total;
+    }
+}
+```
+
+Guidelines:
+
+- Use `[MemoryDiagnoser]` to track allocations.
+- Mark the current approach as `[Benchmark(Baseline = true)]`.
+- Isolate benchmarks in a dedicated `benchmarks/` or `tests/Performance` project.
+- Never run benchmarks on shared CI runners or under debug builds.
+- Use `InvocationCount` and `IterationCount` for deterministic, stable results.
+- Compare against the baseline; reject changes that regress latency or allocations beyond the defined threshold.
+
+### Load Testing
+
+Load testing validates system behaviour under expected production traffic. Prefer tools such as NBomber, k6, or JMeter. Execute against staging or dedicated performance environments, never production.
+
+```csharp
+public sealed class OrderApiLoadTest
+{
+    [Test]
+    public async Task CreateOrder_Should_SustainTargetThroughput_When_LoadIsApplied()
+    {
+        var scenario = Scenario.Create("create_order", async context =>
+        {
+            var response = await context.Client.PostAsJsonAsync("/orders", new
+            {
+                CustomerId = Guid.NewGuid(),
+                Items = TestData.CreateItems(5)
+            });
+
+            return response.IsSuccessStatusCode
+                ? Response.Ok()
+                : Response.Fail();
+        })
+        .WithLoadSimulations(
+            Simulation.Inject(rate: 100, interval: TimeSpan.FromSeconds(1), during: TimeSpan.FromMinutes(5))
+        );
+
+        var stats = NBomberRunner.Run(scenario);
+
+        stats.ScenarioStats[0].Ok.LatencyPercent75.Should().BeLessThan(TimeSpan.FromMilliseconds(200));
+        stats.ScenarioStats[0].Ok.LatencyPercent99.Should().BeLessThan(TimeSpan.FromMilliseconds(500));
+        stats.ScenarioStats[0].FailRate.Should().Be(0);
+    }
+}
+```
+
+Guidelines:
+
+- Define realistic user scenarios that exercise critical paths.
+- Assert on p50, p95, and p99 latencies, not just averages.
+- Assert on throughput (requests per second) and error rates.
+- Warm up the system before recording metrics.
+- Run against an environment that mirrors production infrastructure.
+
+### Smoke Testing
+
+Smoke testing is a minimal post-deployment validation that the system is healthy and responsive.
+
+```csharp
+[Test]
+public async Task HealthEndpoints_Should_Return200_When_SmokeTestRuns()
+{
+    var client = _factory.CreateClient();
+    var response = await client.GetAsync("/health/ready");
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+}
+```
+
+Guidelines:
+
+- Use very light load (1–5 virtual users).
+- Run for a short duration (1–5 minutes).
+- Verify only the most critical paths and endpoints.
+- Run immediately after deployment to catch catastrophic failures before further rollout.
+
+### Soak Testing
+
+Soak testing applies sustained load over an extended period to detect resource leaks and gradual degradation.
+
+Guidelines:
+
+- Run for several hours or overnight.
+- Monitor memory usage, connection pool saturation, disk space, and GC behaviour.
+- Use steady-state load at or slightly above expected peak.
+- Investigate any upward trend in latency or memory over time.
+
+### Stress Testing
+
+Stress testing pushes the system beyond expected capacity to identify breaking points and measure recovery.
+
+Guidelines:
+
+- Ramp up load incrementally until errors appear or latency degrades sharply.
+- Record the maximum sustainable throughput and the point of failure.
+- After overload, verify the system recovers without manual intervention.
+- Do not run stress tests against shared environments or production.
+
+### CI Integration and Regression Thresholds
+
+Performance tests must run in CI to prevent regressions.
+
+Guidelines:
+
+- Run BenchmarkDotNet benchmarks in CI with `--exporters json` or `--exporters github`.
+- Store baseline results as build artifacts or in a dedicated performance database.
+- Fail the build if a benchmark regresses by more than the defined threshold (e.g., 10% latency increase or any allocation increase).
+- Schedule load, soak, and stress tests on dedicated CI pipelines (nightly or weekly), not on every commit.
+- Never run heavy load tests on shared CI runners to avoid the thundering herd problem.
+- Tag performance test results with commit SHA and branch name for traceability.
+
 ---
 
-### Security Standards
+## Security Standards
 
 - Validate all external input.
 - Use parameterized database queries.
